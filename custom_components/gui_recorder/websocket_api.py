@@ -529,6 +529,10 @@ async def ws_import_legacy(hass: HomeAssistant, connection: websocket_api.Active
 @websocket_api.websocket_command({vol.Required("type"): "gui_recorder/disable_legacy"})
 async def ws_disable_legacy(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     result = await async_disable_legacy(hass)
+    if result.get("ok"):
+        data = await async_reload_data(hass)
+        data["pending_restart"] = True
+        await async_save_data(hass, data)
     hass.data[DOMAIN]["migration"] = await async_detect_sync_status(hass)
     connection.send_result(msg["id"], result)
 
@@ -540,6 +544,9 @@ async def ws_enable_gui(hass: HomeAssistant, connection: websocket_api.ActiveCon
     result = await async_ensure_gui_enabled(hass)
     if result.get("ok"):
         await async_write_yaml(hass)
+        data = await async_reload_data(hass)
+        data["pending_restart"] = True
+        await async_save_data(hass, data)
     hass.data[DOMAIN]["migration"] = await async_detect_sync_status(hass)
     connection.send_result(msg["id"], result)
 

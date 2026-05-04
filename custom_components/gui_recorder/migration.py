@@ -181,7 +181,7 @@ def _detect_sync_status(hass: HomeAssistant) -> dict[str, Any]:
 
     recorder_yaml_path = Path(hass.config.path("recorder.yaml"))
     recorder_yaml_exists = recorder_yaml_path.exists()
-    if recorder_yaml_exists and not legacy_source_type:
+    if recorder_yaml_exists and not legacy_source_type and not gui_include_active:
         legacy_source_type = "recorder_yaml"
         legacy_source_path = str(recorder_yaml_path)
         legacy_config = _parse_yaml_text(recorder_yaml_path.read_text(encoding="utf-8"))
@@ -204,7 +204,10 @@ def _detect_sync_status(hass: HomeAssistant) -> dict[str, Any]:
 
 
 async def async_detect_sync_status(hass: HomeAssistant) -> dict[str, Any]:
-    return await hass.async_add_executor_job(_detect_sync_status, hass)
+    status = await hass.async_add_executor_job(_detect_sync_status, hass)
+    data = hass.data.get(DOMAIN, {}).get("data", {})
+    status["legacy_imported_at"] = data.get("legacy_imported_at")
+    return status
 
 
 def _comment_block(lines: list[str], block: BlockInfo) -> list[str]:
@@ -235,7 +238,24 @@ def _disable_legacy_sync(hass: HomeAssistant) -> dict[str, Any]:
     backup = _make_backup(config_path)
     updated = _comment_block(lines, recorder_block)
     config_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
-    return {"ok": True, "backup_path": backup, "changed_file": str(config_path)}
+
+    renamed_include: str | None = None
+    if include_target:
+        included_path = Path(hass.config.path(include_target))
+        if included_path.exists():
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            disabled_path = included_path.with_name(
+                f"{included_path.name}.gui_recorder_disabled_{stamp}"
+            )
+            included_path.rename(disabled_path)
+            renamed_include = str(disabled_path)
+
+    return {
+        "ok": True,
+        "backup_path": backup,
+        "changed_file": str(config_path),
+        "renamed_include": renamed_include,
+    }
 
 
 async def async_disable_legacy(hass: HomeAssistant) -> dict[str, Any]:
@@ -283,7 +303,7 @@ def _import_legacy_sync(hass: HomeAssistant) -> dict[str, Any]:
 
     updates: dict[str, Any] = {
         "excluded_entities": sorted(set(supported.get("excluded_entities") or [])),
-        "pending_restart": True,
+        "legacy_imported_at": datetime.now().isoformat(timespec="seconds"),
     }
     for key in ("purge_keep_days", "commit_interval"):
         value = supported.get(key)

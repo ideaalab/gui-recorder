@@ -13,6 +13,7 @@ DEFAULT_STORAGE = {
     "auto_update_data": True,
     "repack_after_manual_purge": False,
     "repack_in_progress": False,
+    "legacy_imported_at": None,
     "stats": {
         "entity_counts": {},
         "generated_at": None,
@@ -26,4 +27,4 @@ PANEL_TITLE = "GUI Recorder"
 PANEL_ICON = "mdi:database-cog"
 PANEL_MODULE_URL = "/api/gui_recorder/static/gui-recorder-panel.js"
 
-INTEGRATION_VERSION = "0.8.22"
+INTEGRATION_VERSION = "0.8.23"

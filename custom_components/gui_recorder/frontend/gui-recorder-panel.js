@@ -516,10 +516,10 @@ class GuiRecorderPanel extends HTMLElement {
         ` : `<div class="message">No legacy recorder configuration was detected for import.</div>`}
 
         <div class="steps">
-          <div class="step ${m.legacy_detected ? '' : 'done'}">
+          <div class="step ${m.legacy_imported_at || !m.legacy_detected ? 'done' : ''}">
             <div class="step-title">Step 1: Import existing configuration</div>
-            <div class="row-note">Use the legacy configuration as the starting point for GUI Recorder.</div>
-            <button class="action-button" id="migration-import" ${!m.legacy_detected || this._migrationBusy ? 'disabled' : ''}>Import detected configuration</button>
+            <div class="row-note">${m.legacy_imported_at ? `Imported on ${this._escapeHtml(m.legacy_imported_at)}. You can re-import to overwrite the current values.` : 'Use the legacy configuration as the starting point for GUI Recorder.'}</div>
+            <button class="action-button" id="migration-import" ${!m.legacy_detected || this._migrationBusy ? 'disabled' : ''}>${m.legacy_imported_at ? 'Re-import detected configuration' : 'Import detected configuration'}</button>
           </div>
 
           <div class="step ${m.legacy_active ? '' : 'done'}">
