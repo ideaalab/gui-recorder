@@ -1,0 +1,19 @@
+{
+  "domain": "gui_recorder",
+  "name": "GUI Recorder",
+  "version": "0.8.22",
+  "documentation": "https://github.com/ideaalab/gui-recorder",
+  "issue_tracker": "https://github.com/ideaalab/gui-recorder/issues",
+  "codeowners": [
+    "@ideaalab"
+  ],
+  "requirements": [],
+  "dependencies": [
+    "frontend",
+    "http",
+    "recorder",
+    "websocket_api"
+  ],
+  "config_flow": true,
+  "iot_class": "local_push"
+}

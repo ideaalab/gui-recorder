@@ -1,0 +1,329 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+import re
+from typing import Any
+
+import yaml
+
+from homeassistant.core import HomeAssistant
+
+from .const import DOMAIN
+
+
+@dataclass
+class BlockInfo:
+    start: int
+    end: int
+    key: str
+    line: str
+    lines: list[str]
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self.lines) + "\n"
+
+
+def _config_path(hass: HomeAssistant) -> Path:
+    return Path(hass.config.path("configuration.yaml"))
+
+
+def _make_backup(path: Path) -> str:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = path.with_name(f"{path.name}.gui_recorder_backup_{stamp}")
+    backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    return str(backup)
+
+
+def _read_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def _find_top_level_block(lines: list[str], key: str) -> BlockInfo | None:
+    start = None
+    for idx, line in enumerate(lines):
+        stripped = line.lstrip()
+        if line.startswith((" ", "\t")):
+            continue
+        if stripped.startswith("#"):
+            continue
+        if re.match(rf"^{re.escape(key)}\s*:", stripped):
+            start = idx
+            break
+
+    if start is None:
+        return None
+
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        line = lines[idx]
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if line.startswith((" ", "\t")):
+            continue
+        if line.lstrip().startswith("#"):
+            continue
+        end = idx
+        break
+
+    return BlockInfo(start=start, end=end, key=key, line=lines[start], lines=lines[start:end])
+
+
+def _normalize_include_target(value: str | None) -> str:
+    if value is None:
+        return ""
+    target = str(value).strip().strip('"\'')
+    target = target.replace("\\", "/")
+    while target.startswith("./"):
+        target = target[2:]
+    return target.strip()
+
+
+def _extract_include_target(line: str) -> str | None:
+    match = re.match(r"^recorder\s*:\s*!include\s+(.+?)\s*$", line.strip())
+    if not match:
+        return None
+    return _normalize_include_target(match.group(1))
+
+
+def _is_gui_recorder_include_target(value: str | None) -> bool:
+    return _normalize_include_target(value) == "gui_recorder.yaml"
+
+
+def _detect_active_gui_recorder_include(lines: list[str]) -> bool:
+    for line in lines:
+        if line.startswith((" ", "\t")):
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if _is_gui_recorder_include_target(_extract_include_target(stripped)):
+            return True
+    return False
+
+
+def _parse_yaml_text(text: str) -> dict[str, Any] | None:
+    try:
+        loaded = yaml.safe_load(text)
+        if isinstance(loaded, dict):
+            return loaded
+    except Exception:
+        return None
+    return None
+
+
+def _extract_summary_from_recorder_config(recorder_cfg: dict[str, Any] | None) -> dict[str, Any]:
+    recorder_cfg = recorder_cfg or {}
+    exclude = recorder_cfg.get("exclude") or {}
+    include = recorder_cfg.get("include") or {}
+    return {
+        "auto_purge": recorder_cfg.get("auto_purge"),
+        "auto_repack": recorder_cfg.get("auto_repack"),
+        "purge_keep_days": recorder_cfg.get("purge_keep_days"),
+        "commit_interval": recorder_cfg.get("commit_interval"),
+        "exclude_entities_count": len(exclude.get("entities") or []),
+        "exclude_domains_count": len(exclude.get("domains") or []),
+        "exclude_globs_count": len(exclude.get("entity_globs") or []),
+        "exclude_event_types_count": len(exclude.get("event_types") or []),
+        "include_entities_count": len(include.get("entities") or []),
+        "include_domains_count": len(include.get("domains") or []),
+        "include_globs_count": len(include.get("entity_globs") or []),
+        "supported_import": {
+            "auto_purge": recorder_cfg.get("auto_purge"),
+            "auto_repack": recorder_cfg.get("auto_repack"),
+            "purge_keep_days": recorder_cfg.get("purge_keep_days"),
+            "commit_interval": recorder_cfg.get("commit_interval"),
+            "excluded_entities": list(exclude.get("entities") or []),
+        },
+    }
+
+
+def _detect_sync_status(hass: HomeAssistant) -> dict[str, Any]:
+    config_path = _config_path(hass)
+    lines = _read_lines(config_path)
+    recorder_block = _find_top_level_block(lines, "recorder")
+
+    gui_include_active = _detect_active_gui_recorder_include(lines)
+
+    legacy_source_path: str | None = None
+    legacy_source_type: str | None = None
+    legacy_config: dict[str, Any] | None = None
+    legacy_active = False
+    legacy_message = None
+
+    if recorder_block:
+        stripped = recorder_block.line.strip()
+        include_target = _extract_include_target(stripped)
+        if include_target is not None:
+            if not _is_gui_recorder_include_target(include_target):
+                legacy_active = True
+                legacy_source_type = "include"
+                legacy_source_path = include_target
+                included_path = Path(hass.config.path(include_target))
+                if included_path.exists():
+                    legacy_config = _parse_yaml_text(included_path.read_text(encoding="utf-8"))
+                else:
+                    legacy_message = f"Included file does not exist: {include_target}"
+        else:
+            legacy_active = True
+            legacy_source_type = "inline"
+            legacy_source_path = str(config_path)
+            loaded = _parse_yaml_text(recorder_block.text)
+            if loaded and "recorder" in loaded:
+                legacy_config = loaded.get("recorder")
+            elif isinstance(loaded, dict):
+                legacy_config = loaded
+
+    recorder_yaml_path = Path(hass.config.path("recorder.yaml"))
+    recorder_yaml_exists = recorder_yaml_path.exists()
+    if recorder_yaml_exists and not legacy_source_type:
+        legacy_source_type = "recorder_yaml"
+        legacy_source_path = str(recorder_yaml_path)
+        legacy_config = _parse_yaml_text(recorder_yaml_path.read_text(encoding="utf-8"))
+
+    summary = _extract_summary_from_recorder_config(legacy_config)
+
+    return {
+        "config_path": str(config_path),
+        "gui_include_active": gui_include_active,
+        "gui_ready": gui_include_active and not legacy_active,
+        "legacy_active": legacy_active,
+        "legacy_detected": bool(legacy_source_type),
+        "legacy_source_type": legacy_source_type,
+        "legacy_source_path": legacy_source_path,
+        "legacy_summary": summary,
+        "legacy_message": legacy_message,
+        "legacy_block_present": recorder_block is not None,
+        "recorder_yaml_exists": recorder_yaml_exists,
+    }
+
+
+async def async_detect_sync_status(hass: HomeAssistant) -> dict[str, Any]:
+    return await hass.async_add_executor_job(_detect_sync_status, hass)
+
+
+def _comment_block(lines: list[str], block: BlockInfo) -> list[str]:
+    new_lines = list(lines)
+    for idx in range(block.start, block.end):
+        line = new_lines[idx]
+        if not line.strip():
+            continue
+        if line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        new_lines[idx] = (" " * indent) + "# " + line[indent:]
+    return new_lines
+
+
+def _disable_legacy_sync(hass: HomeAssistant) -> dict[str, Any]:
+    config_path = _config_path(hass)
+    lines = _read_lines(config_path)
+    recorder_block = _find_top_level_block(lines, "recorder")
+    if not recorder_block:
+        return {"ok": False, "error": "No active recorder: block was found in configuration.yaml."}
+
+    stripped = recorder_block.line.strip()
+    include_target = _extract_include_target(stripped)
+    if _is_gui_recorder_include_target(include_target):
+        return {"ok": False, "error": "The active recorder config already points to gui_recorder.yaml."}
+
+    backup = _make_backup(config_path)
+    updated = _comment_block(lines, recorder_block)
+    config_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    return {"ok": True, "backup_path": backup, "changed_file": str(config_path)}
+
+
+async def async_disable_legacy(hass: HomeAssistant) -> dict[str, Any]:
+    return await hass.async_add_executor_job(_disable_legacy_sync, hass)
+
+
+def _ensure_gui_sync(hass: HomeAssistant) -> dict[str, Any]:
+    config_path = _config_path(hass)
+    lines = _read_lines(config_path)
+    recorder_block = _find_top_level_block(lines, "recorder")
+
+    if recorder_block:
+        stripped = recorder_block.line.strip()
+        include_target = _extract_include_target(stripped)
+        if not _is_gui_recorder_include_target(include_target):
+            return {
+                "ok": False,
+                "error": "Another active recorder configuration is still enabled. Disable it before enabling gui_recorder.yaml.",
+            }
+
+    gui_include_active = _detect_active_gui_recorder_include(lines)
+    backup = _make_backup(config_path)
+
+    updated = list(lines)
+    if not gui_include_active:
+        if updated and updated[-1].strip():
+            updated.append("")
+        updated.append("recorder: !include gui_recorder.yaml")
+
+    config_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    return {"ok": True, "backup_path": backup, "changed_file": str(config_path)}
+
+
+async def async_ensure_gui_enabled(hass: HomeAssistant) -> dict[str, Any]:
+    return await hass.async_add_executor_job(_ensure_gui_sync, hass)
+
+
+def _import_legacy_sync(hass: HomeAssistant) -> dict[str, Any]:
+    status = _detect_sync_status(hass)
+    if not status.get("legacy_detected"):
+        return {"ok": False, "error": "No legacy recorder configuration was detected to import."}
+
+    summary = status.get("legacy_summary") or {}
+    supported = summary.get("supported_import") or {}
+
+    updates: dict[str, Any] = {
+        "excluded_entities": sorted(set(supported.get("excluded_entities") or [])),
+        "pending_restart": True,
+    }
+    for key in ("purge_keep_days", "commit_interval"):
+        value = supported.get(key)
+        if value is not None:
+            try:
+                updates[key] = int(value)
+            except (TypeError, ValueError):
+                pass
+    for key in ("auto_purge", "auto_repack"):
+        value = supported.get(key)
+        if value is not None:
+            updates[key] = bool(value)
+
+    unsupported = {
+        "exclude_domains_count": summary.get("exclude_domains_count", 0),
+        "exclude_globs_count": summary.get("exclude_globs_count", 0),
+        "exclude_event_types_count": summary.get("exclude_event_types_count", 0),
+        "include_entities_count": summary.get("include_entities_count", 0),
+        "include_domains_count": summary.get("include_domains_count", 0),
+        "include_globs_count": summary.get("include_globs_count", 0),
+    }
+
+    return {
+        "ok": True,
+        "storage_updates": updates,
+        "imported": {
+            "excluded_entities": len(updates["excluded_entities"]),
+            "purge_keep_days": updates.get("purge_keep_days"),
+            "auto_purge": updates.get("auto_purge"),
+            "auto_repack": updates.get("auto_repack"),
+            "commit_interval": updates.get("commit_interval"),
+        },
+        "unsupported": unsupported,
+        "source": status.get("legacy_source_path"),
+    }
+
+
+async def async_import_legacy(hass: HomeAssistant) -> dict[str, Any]:
+    result = await hass.async_add_executor_job(_import_legacy_sync, hass)
+    if result.get("ok"):
+        updates = result.pop("storage_updates", {})
+        hass.data[DOMAIN]["data"].update(updates)
+    return result
