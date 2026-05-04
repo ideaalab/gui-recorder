@@ -48,7 +48,9 @@ class GuiRecorderPanel extends HTMLElement {
   }
 
   set narrow(narrow) {
+    if (this._narrow === narrow) return;
     this._narrow = narrow;
+    this._render();
   }
 
   set route(route) {
@@ -512,24 +514,24 @@ class GuiRecorderPanel extends HTMLElement {
         ${m.legacy_detected ? `
           <div class="message warn"><strong>Existing recorder configuration detected.</strong> ${m.legacy_source_path ? `Source: <code>${this._escapeHtml(m.legacy_source_path)}</code>.` : ''}</div>
           ${lines.length ? `<div class="row-note" style="margin:10px 0 12px;">Detected values: ${lines.map((l) => `<code>${this._escapeHtml(l)}</code>`).join(' · ')}</div>` : ''}
-          ${hasUnsupported ? `<div class="row-note">The importer handles <code>auto_purge</code>, <code>auto_repack</code>, <code>purge_keep_days</code>, <code>commit_interval</code>, and <code>exclude.entities</code>. Domain filters, globs, event_types, and includes are shown for review but are not imported into the internal state.</div>` : ''}
+          ${hasUnsupported ? `<div class="message warn"><strong>GUI Recorder is entity-level only.</strong> Domain filters, entity globs, event_types, and <code>include.*</code> from your legacy configuration are <strong>not</strong> imported and will <strong>not</strong> be managed by the GUI. If your setup relies on those filters, copy them to a separate file before completing migration — they will be lost once <code>gui_recorder.yaml</code> becomes the active recorder source.</div>` : ''}
         ` : `<div class="message">No legacy recorder configuration was detected for import.</div>`}
 
         <div class="steps">
           <div class="step ${m.legacy_imported_at || !m.legacy_detected ? 'done' : ''}">
-            <div class="step-title">Step 1: Import existing configuration</div>
-            <div class="row-note">${m.legacy_imported_at ? `Imported on ${this._escapeHtml(m.legacy_imported_at)}. You can re-import to overwrite the current values.` : 'Use the legacy configuration as the starting point for GUI Recorder.'}</div>
-            <button class="action-button" id="migration-import" ${!m.legacy_detected || this._migrationBusy ? 'disabled' : ''}>${m.legacy_imported_at ? 'Re-import detected configuration' : 'Import detected configuration'}</button>
+            <div class="step-title">Step 1: Import existing configuration${m.legacy_imported_at || !m.legacy_detected ? '<span class="step-check" aria-label="completed">✓</span>' : ''}</div>
+            <div class="row-note">${m.legacy_imported_at ? `Imported on ${this._escapeHtml(m.legacy_imported_at)}.` : 'Use the legacy configuration as the starting point for GUI Recorder.'}</div>
+            <button class="action-button" id="migration-import" ${!m.legacy_detected || m.legacy_imported_at || this._migrationBusy ? 'disabled' : ''}>Import detected configuration</button>
           </div>
 
           <div class="step ${m.legacy_active ? '' : 'done'}">
-            <div class="step-title">Step 2: Disable previous recorder config</div>
+            <div class="step-title">Step 2: Disable previous recorder config${!m.legacy_active ? '<span class="step-check" aria-label="completed">✓</span>' : ''}</div>
             <div class="row-note">Comment the active <code>recorder:</code> block in <code>configuration.yaml</code> and create an automatic backup.</div>
             <button class="action-button" id="migration-disable" ${!m.legacy_active || this._migrationBusy ? 'disabled' : ''}>Disable current recorder config</button>
           </div>
 
           <div class="step ${m.gui_include_active ? 'done' : ''}">
-            <div class="step-title">Step 3: Enable GUI Recorder</div>
+            <div class="step-title">Step 3: Enable GUI Recorder${m.gui_include_active ? '<span class="step-check" aria-label="completed">✓</span>' : ''}</div>
             <div class="row-note">Add <code>recorder: !include gui_recorder.yaml</code> if it is missing.</div>
             <button class="action-button" id="migration-enable" ${m.gui_include_active || this._migrationBusy ? 'disabled' : ''}>Enable gui_recorder.yaml</button>
           </div>
@@ -601,8 +603,12 @@ class GuiRecorderPanel extends HTMLElement {
         .message.ok { color: var(--success-color, #43a047); }
         .steps { display:grid; gap:12px; margin-top:12px; }
         .step { padding:12px; border-radius:10px; border:1px solid var(--divider-color); background:var(--primary-background-color); }
-        .step.done { opacity:0.75; }
-        .step-title { font-weight:600; margin-bottom:6px; }
+        .step.done { opacity:0.85; border-color: var(--success-color, #43a047); }
+        .step-title { font-weight:600; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
+        .step-check { color: var(--success-color, #43a047); font-weight:700; font-size:1.1em; line-height:1; }
+        .menu-button { background:transparent; border:none; color:var(--primary-text-color); cursor:pointer; padding:6px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; }
+        .menu-button:hover { background: var(--secondary-background-color); }
+        .menu-button:focus-visible { outline:2px solid var(--primary-color); outline-offset:2px; }
         .settings-grid, .stats-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; }
         .stat-box { padding:12px; border-radius:10px; background:var(--primary-background-color); border:1px solid var(--divider-color); }
         .setting-box { padding:12px; border-radius:10px; background:var(--primary-background-color); border:1px solid var(--divider-color); }
@@ -657,7 +663,11 @@ class GuiRecorderPanel extends HTMLElement {
         <div class="toolbar">
           <div class="toolbar-head">
             <div>
-              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;"><h1 style="margin:0;">GUI Recorder</h1><span class="state-pill">v${this._escapeHtml(this._data.version || "0.8.4")}</span></div>
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                ${this._narrow ? `<button class="menu-button" id="gr-menu-button" aria-label="Open sidebar"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg></button>` : ''}
+                <h1 style="margin:0;">GUI Recorder</h1>
+                <span class="state-pill">v${this._escapeHtml(this._data.version || "0.8.4")}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1018,6 +1028,10 @@ class GuiRecorderPanel extends HTMLElement {
     this.shadowRoot.getElementById("migration-import")?.addEventListener("click", () => this._migrationAction("gui_recorder/import_legacy"));
     this.shadowRoot.getElementById("migration-disable")?.addEventListener("click", () => this._migrationAction("gui_recorder/disable_legacy"));
     this.shadowRoot.getElementById("migration-enable")?.addEventListener("click", () => this._migrationAction("gui_recorder/enable_gui"));
+
+    this.shadowRoot.getElementById("gr-menu-button")?.addEventListener("click", () => {
+      this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true }));
+    });
 
     this.shadowRoot.querySelectorAll("[data-purge-entity]").forEach((el) => {
       if (el.dataset.bound === "1") return;
