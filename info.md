@@ -1,20 +1,20 @@
 # GUI Recorder
 
-Panel lateral para Home Assistant que gestiona la configuración del `recorder` y el mantenimiento de la base de datos (SQLite) desde una UI, sin tocar `configuration.yaml`.
+A Home Assistant sidebar panel to manage your `recorder` configuration and database maintenance (SQLite) from a UI — no `configuration.yaml` editing required.
 
-## Qué hace
+## What it does
 
-- Activa/desactiva la grabación por dispositivo y por entidad con un toggle.
-- Muestra estadísticas de la base de datos: registros totales / actuales / obsoletos, exclusiones, tamaño en disco, ruta del SQLite.
-- Acciones de mantenimiento: purgar BD, purgar entidades excluidas (historial completo), repack, reiniciar HA.
-- Detecta exclusiones huérfanas (que ya no coinciden con ninguna entidad) y permite eliminarlas en lote.
-- Migración asistida del `recorder` heredado desde `configuration.yaml`.
+- Enable or disable recording per device and per entity with a toggle.
+- Database statistics: total / current / obsolete records, matched exclusions, disk size, SQLite path.
+- Maintenance actions: purge the database, purge excluded entities (full history), repack, restart HA.
+- Detects orphan exclusions (entries that no longer match any entity) and removes them in bulk.
+- Guided migration from a legacy `recorder:` block in `configuration.yaml`.
 
-## Requisitos
+## Requirements
 
 - Home Assistant 2024.1.0+
-- Base de datos del recorder en **SQLite** (MariaDB / PostgreSQL no soportados).
+- Recorder database on **SQLite** (MariaDB and PostgreSQL are not supported).
 
-## Configuración
+## Setup
 
-Tras instalar, añade la integración desde **Ajustes → Dispositivos y servicios → Añadir integración → GUI Recorder**. El panel aparece en la barra lateral.
+After installing, add the integration from **Settings → Devices & services → Add integration → GUI Recorder**. The panel appears in the sidebar.
