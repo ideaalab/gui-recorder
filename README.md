@@ -7,6 +7,9 @@ A Home Assistant custom component that adds a sidebar panel to manage your `reco
 
 > **SQLite only.** MariaDB and PostgreSQL are explicitly rejected during setup with a clear error message.
 
+> [!WARNING]
+> **Use with care.** Purge operations permanently delete recorder history and cannot be undone. The migration flow modifies `configuration.yaml` directly. Always create a full Home Assistant backup before using maintenance or migration features. The authors take no responsibility for data loss.
+
 ## Features
 
 - **Sidebar panel** integrated directly into the Home Assistant navigation bar.

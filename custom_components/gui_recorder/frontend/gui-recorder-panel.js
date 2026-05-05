@@ -362,17 +362,29 @@ class GuiRecorderPanel extends HTMLElement {
     if (deviceId) this._expanded.add(deviceId);
     this._message = `Purging history for ${entityId}…`;
     this._render();
+    let statsRefreshed = false;
     try {
-      await this._hass.connection.sendMessagePromise({ type: "gui_recorder/purge_entity", entity_id: entityId });
-      this._refreshRecommended = true;
-      this._message = `Purge completed for ${entityId}. Refreshing analysis…`;
+      const result = await this._hass.connection.sendMessagePromise({ type: "gui_recorder/purge_entity", entity_id: entityId });
+      if (result?.stats) {
+        statsRefreshed = true;
+        this._message = `Purge completed for ${entityId}. Data updated.`;
+      } else {
+        this._refreshRecommended = true;
+        this._message = `Purge completed for ${entityId}. Refreshing analysis…`;
+      }
     } catch (err) {
       this._message = `Error purging ${entityId}: ${err?.message || err}`;
       this._render();
     } finally {
       this._pending.delete(`purge:${entityId}`);
       this._render();
-      if (!this._analyzing && this._autoUpdateDataValue) this._analyzeDb();
+      if (statsRefreshed) {
+        this._refreshRecommended = false;
+        this._dataMessage = "Data updated.";
+        await this._load();
+      } else if (!this._analyzing && this._autoUpdateDataValue) {
+        this._analyzeDb();
+      }
     }
   }
 
@@ -384,17 +396,29 @@ class GuiRecorderPanel extends HTMLElement {
     this._pending.add(`purge-device:${deviceId}`);
     this._message = `Purging history for ${deviceName}…`;
     this._render();
+    let statsRefreshed = false;
     try {
       const result = await this._hass.connection.sendMessagePromise({ type: "gui_recorder/purge_device", device_id: deviceId });
-      this._refreshRecommended = true;
-      this._message = `Purge completed for ${deviceName} (${result?.purged_entities || 0} entities). Refreshing analysis…`;
+      if (result?.stats) {
+        statsRefreshed = true;
+        this._message = `Purge completed for ${deviceName} (${result?.purged_entities || 0} entities). Data updated.`;
+      } else {
+        this._refreshRecommended = true;
+        this._message = `Purge completed for ${deviceName} (${result?.purged_entities || 0} entities). Refreshing analysis…`;
+      }
     } catch (err) {
       this._message = `Error purging ${deviceName}: ${err?.message || err}`;
       this._render();
     } finally {
       this._pending.delete(`purge-device:${deviceId}`);
       this._render();
-      if (!this._analyzing && this._autoUpdateDataValue) this._analyzeDb();
+      if (statsRefreshed) {
+        this._refreshRecommended = false;
+        this._dataMessage = "Data updated.";
+        await this._load();
+      } else if (!this._analyzing && this._autoUpdateDataValue) {
+        this._analyzeDb();
+      }
     }
   }
 
@@ -510,6 +534,7 @@ class GuiRecorderPanel extends HTMLElement {
     return `
       <div class="card migration">
         <h2>Migration / configuration conflicts</h2>
+        <div class="message warn"><strong>⚠ Back up Home Assistant before proceeding.</strong> Steps 2 and 3 modify <code>configuration.yaml</code> and require a restart. Step 1 is non-destructive.</div>
         ${m.gui_ready ? `<div class="message ok">GUI Recorder is enabled and no active configuration conflicts were detected.</div>` : ''}
         ${m.legacy_detected ? `
           <div class="message warn"><strong>Existing recorder configuration detected.</strong> ${m.legacy_source_path ? `Source: <code>${this._escapeHtml(m.legacy_source_path)}</code>.` : ''}</div>

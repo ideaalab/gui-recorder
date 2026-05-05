@@ -472,7 +472,8 @@ async def ws_purge_entity(hass: HomeAssistant, connection: websocket_api.ActiveC
         blocking=True,
     )
     await _wait_recorder_idle(hass)
-    connection.send_result(msg["id"], {"ok": True, "refresh_required": True})
+    stats = await async_analyze_db(hass)
+    connection.send_result(msg["id"], {"ok": True, "refresh_required": True, "stats": stats})
 
 
 @websocket_api.require_admin
@@ -489,7 +490,8 @@ async def ws_purge_device(hass: HomeAssistant, connection: websocket_api.ActiveC
             blocking=True,
         )
         await _wait_recorder_idle(hass)
-    connection.send_result(msg["id"], {"ok": True, "refresh_required": True, "purged_entities": len(entity_ids)})
+    stats = await async_analyze_db(hass)
+    connection.send_result(msg["id"], {"ok": True, "refresh_required": True, "purged_entities": len(entity_ids), "stats": stats})
 
 
 
