@@ -1,9 +1,11 @@
 # GUI Recorder
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/default)
 [![GitHub release](https://img.shields.io/github/v/release/ideaalab/gui-recorder)](https://github.com/ideaalab/gui-recorder/releases)
 
 A Home Assistant custom component that adds a sidebar panel to manage your `recorder` configuration (which entities get recorded) and database maintenance (purge, repack, stats) — without editing `configuration.yaml`.
+
+![GUI Recorder overview](images/overview.png)
 
 > **SQLite only.** MariaDB and PostgreSQL are explicitly rejected during setup with a clear error message.
 
@@ -25,14 +27,25 @@ A Home Assistant custom component that adds a sidebar panel to manage your `reco
 - **Guided migration**: imports your existing `recorder` configuration from `configuration.yaml` in 3 steps (import → disable old block → activate `!include`).
 - **Cache busting**: the panel JS is served with `?v=VERSION` to prevent stale versions after updates.
 
+## Screenshots
+
+**Per-device and per-entity control**, with purge actions per row:
+
+![Devices view](images/devices.png)
+
+**Orphan exclusion detection and obsolete record cleanup**:
+
+![Unmatched exclusions and obsolete records](images/exclusions-obsolete.png)
+
 ## Installation
 
 ### Via HACS (recommended)
 
-1. Go to HACS → Integrations → `⋮` menu → **Custom repositories**.
-2. Add `https://github.com/ideaalab/gui-recorder` with category **Integration**.
-3. Search for **GUI Recorder**, install it, and restart Home Assistant.
-4. Go to **Settings → Devices & services → Add integration** and choose **GUI Recorder**.
+GUI Recorder is part of the default HACS catalog — no custom repository needed.
+
+1. Open **HACS → Integrations**, search for **GUI Recorder**, and install it.
+2. Restart Home Assistant.
+3. Go to **Settings → Devices & services → Add integration** and choose **GUI Recorder**.
 
 ### Manual
 
