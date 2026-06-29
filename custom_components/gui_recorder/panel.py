@@ -24,7 +24,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
 
     hass.http.app.router.add_get(PANEL_MODULE_URL, _serve_panel_js)
 
-    await frontend.async_register_built_in_panel(
+    frontend.async_register_built_in_panel(
         hass,
         component_name="custom",
         sidebar_title=PANEL_TITLE,
