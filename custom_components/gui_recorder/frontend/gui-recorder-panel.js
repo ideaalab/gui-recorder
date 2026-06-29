@@ -157,6 +157,11 @@ class GuiRecorderPanel extends HTMLElement {
     return false;
   }
 
+  _isMigrationPending() {
+    const m = this._migration || {};
+    return m.legacy_detected === true && !m.gui_include_active;
+  }
+
   _entityMatches(entity) {
     if (!this._filter) return true;
     const text = `${entity.entity_id} ${entity.name} ${entity.platform} ${entity.domain}`.toLowerCase();
@@ -608,6 +613,7 @@ class GuiRecorderPanel extends HTMLElement {
     const stats = this._data.stats || {};
     const totalRows = Number(stats.total_rows || 0);
     const purgeActionBusy = this._isPurgeBusy();
+    const migrationPending = this._isMigrationPending();
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -756,6 +762,14 @@ class GuiRecorderPanel extends HTMLElement {
           ${stats.error ? `<div class="message">Error: ${this._escapeHtml(stats.error)}</div>` : ""}
         </div>
 
+        ${migrationPending ? `
+        <div class="card" style="border-color:var(--warning-color,#ff9800);">
+          <div class="message warn" style="margin-top:0;">
+            <strong>Migration required.</strong> Complete the migration above before managing entities or running maintenance actions.
+            Once <code>gui_recorder.yaml</code> is the active recorder source (Step 3 done), all sections will become available.
+          </div>
+        </div>
+        ` : `
         <div class="card">
           <h2>Maintenance actions</h2>
           ${this._data.repack_in_progress ? `<div class="notice pending"><strong>Repack in progress.</strong> The database file is being compacted; this can take a while on large databases. Other purge actions are temporarily disabled.</div>` : ""}
@@ -962,6 +976,8 @@ class GuiRecorderPanel extends HTMLElement {
             </table>
           `}
         </div>
+        `}
+
       </div>
     `;
 
