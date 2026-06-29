@@ -9,13 +9,19 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, INTEGRATION_VERSION, PANEL_ICON, PANEL_MODULE_URL, PANEL_TITLE, PANEL_URL_PATH
 
+_PANEL_JS_PATH = Path(__file__).parent / "frontend" / "gui-recorder-panel.js"
 
-async def _serve_panel_js(_request: web.Request) -> web.Response:
-    path = Path(__file__).parent / "frontend" / "gui-recorder-panel.js"
-    return web.Response(text=path.read_text(encoding="utf-8"), content_type="application/javascript")
+
+def _read_panel_js() -> str:
+    return _PANEL_JS_PATH.read_text(encoding="utf-8")
 
 
 async def async_setup_panel(hass: HomeAssistant) -> None:
+    panel_js = await hass.async_add_executor_job(_read_panel_js)
+
+    async def _serve_panel_js(_request: web.Request) -> web.Response:
+        return web.Response(text=panel_js, content_type="application/javascript")
+
     hass.http.app.router.add_get(PANEL_MODULE_URL, _serve_panel_js)
 
     await frontend.async_register_built_in_panel(
