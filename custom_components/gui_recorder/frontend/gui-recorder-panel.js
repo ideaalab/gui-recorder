@@ -17,6 +17,7 @@ class GuiRecorderPanel extends HTMLElement {
       stats: { entity_counts: {}, generated_at: null, db_path: "home-assistant_v2.db", total_rows: 0, error: null },
     };
     this._filter = "";
+    this._filterDebounceTimer = null;
     this._message = "";
     this._refreshRecommended = false;
     this._expanded = new Set();
@@ -993,7 +994,8 @@ class GuiRecorderPanel extends HTMLElement {
 
     this.shadowRoot.getElementById("filter")?.addEventListener("input", (ev) => {
       this._filter = ev.target.value;
-      this._render();
+      clearTimeout(this._filterDebounceTimer);
+      this._filterDebounceTimer = setTimeout(() => this._render(), 250);
     });
 
     this.shadowRoot.getElementById("analyze-db")?.addEventListener("click", () => this._analyzeDb());
