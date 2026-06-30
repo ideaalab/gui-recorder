@@ -161,15 +161,39 @@ def _build_rows(hass: HomeAssistant) -> dict:
 
         orphan_entities.append(row)
 
+    live_entity_ids = set(hass.states.async_entity_ids())
+
     for entity_id, count in entity_counts.items():
         if entity_id in current_entity_ids:
+            continue
+        domain = entity_id.split(".", 1)[0] if "." in entity_id else "unknown"
+        if entity_id in live_entity_ids:
+            # Has a live state but no entity_registry entry (e.g. legacy YAML
+            # platforms like snmp/template/command_line without unique_id).
+            # It's not obsolete, just unregistered - list it as an orphan.
+            state_obj = hass.states.get(entity_id)
+            friendly_name = state_obj.attributes.get("friendly_name") if state_obj else None
+            current_entity_ids.add(entity_id)
+            orphan_entities.append(
+                {
+                    "entity_id": entity_id,
+                    "name": friendly_name or entity_id,
+                    "disabled_by": None,
+                    "hidden_by": None,
+                    "platform": domain,
+                    "domain": domain,
+                    "device_id": None,
+                    "recorded": entity_id not in excluded,
+                    "record_count": int(count),
+                }
+            )
             continue
         obsolete_entities.append(
             {
                 "entity_id": entity_id,
                 "name": entity_id,
-                "platform": entity_id.split(".", 1)[0] if "." in entity_id else "unknown",
-                "domain": entity_id.split(".", 1)[0] if "." in entity_id else "unknown",
+                "platform": domain,
+                "domain": domain,
                 "device_id": None,
                 "recorded": entity_id not in excluded,
                 "record_count": int(count),
