@@ -83,44 +83,44 @@ async def async_write_yaml(hass: HomeAssistant) -> str:
         # (e.g. edited externally), skip it rather than write a broken recorder config.
         manual = {}
 
-    exclude_block: dict[str, list[str]] = dict(manual.get("exclude", {}))
+    # Build ordered dicts (Python 3.7+ preserves insertion order) so safe_dump
+    # emits them in our preferred order: entities first under exclude, then the
+    # rest. safe_dump handles quoting for values with YAML-significant chars
+    # (e.g. globs starting with '*' which YAML would otherwise parse as alias
+    # references and reject — see https://github.com/ideaalab/gui-recorder).
+    manual_exclude = manual.get("exclude", {})
+    exclude_block: dict[str, list[str]] = {}
     if excluded_entities:
         exclude_block["entities"] = excluded_entities
-    include_block: dict[str, list[str]] = dict(manual.get("include", {}))
+    for key in _ALLOWED_EXCLUDE_KEYS:
+        if manual_exclude.get(key):
+            exclude_block[key] = manual_exclude[key]
 
-    lines: list[str] = []
-    lines.append("# This file is managed by the GUI Recorder integration.")
-    lines.append("# Manual edits will be overwritten.")
-    lines.append("")
-    lines.append(f"auto_purge: {'true' if auto_purge else 'false'}")
-    lines.append(f"auto_repack: {'true' if auto_repack else 'false'}")
-    lines.append(f"purge_keep_days: {purge_keep_days}")
-    lines.append(f"commit_interval: {commit_interval}")
-    lines.append("")
+    manual_include = manual.get("include", {})
+    include_block: dict[str, list[str]] = {}
+    for key in _ALLOWED_INCLUDE_KEYS:
+        if manual_include.get(key):
+            include_block[key] = manual_include[key]
+
+    parts: list[str] = []
+    parts.append("# This file is managed by the GUI Recorder integration.")
+    parts.append("# Manual edits will be overwritten.")
+    parts.append("")
+    parts.append(f"auto_purge: {'true' if auto_purge else 'false'}")
+    parts.append(f"auto_repack: {'true' if auto_repack else 'false'}")
+    parts.append(f"purge_keep_days: {purge_keep_days}")
+    parts.append(f"commit_interval: {commit_interval}")
+    parts.append("")
 
     if exclude_block:
-        lines.append("exclude:")
-        if exclude_block.get("entities"):
-            lines.append("  entities:")
-            for entity_id in exclude_block["entities"]:
-                lines.append(f"    - {entity_id}")
-        for key in _ALLOWED_EXCLUDE_KEYS:
-            if exclude_block.get(key):
-                lines.append(f"  {key}:")
-                for item in exclude_block[key]:
-                    lines.append(f"    - {item}")
+        parts.append(yaml.safe_dump({"exclude": exclude_block}, sort_keys=False, default_flow_style=False).rstrip())
     else:
-        lines.append("exclude: {}")
+        parts.append("exclude: {}")
 
     if include_block:
-        lines.append("")
-        lines.append("include:")
-        for key in _ALLOWED_INCLUDE_KEYS:
-            if include_block.get(key):
-                lines.append(f"  {key}:")
-                for item in include_block[key]:
-                    lines.append(f"    - {item}")
+        parts.append("")
+        parts.append(yaml.safe_dump({"include": include_block}, sort_keys=False, default_flow_style=False).rstrip())
 
-    content = "\n".join(lines) + "\n"
+    content = "\n".join(parts) + "\n"
     await hass.async_add_executor_job(path.write_text, content, "utf-8")
     return str(path)
