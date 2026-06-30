@@ -14,7 +14,7 @@ from .const import DOMAIN, INTEGRATION_VERSION
 from .db_stats import async_analyze_db
 from .migration import async_detect_sync_status, async_disable_legacy, async_ensure_gui_enabled, async_import_legacy
 from .storage import async_reload_data, async_save_data
-from .yaml_writer import async_write_yaml
+from .yaml_writer import async_write_yaml, parse_manual_exclusions
 
 _LOGGER = logging.getLogger(__name__)
 _BLOCK_API_WARNED = False
@@ -236,6 +236,7 @@ def _build_rows(hass: HomeAssistant) -> dict:
         "migration": hass.data[DOMAIN].get("migration", {}),
         "matched_exclusions": matched_exclusions,
         "unmatched_exclusions": unmatched_exclusions,
+        "manual_exclusions_yaml": data.get("manual_exclusions_yaml", ""),
         "version": INTEGRATION_VERSION,
     }
 
@@ -334,6 +335,37 @@ async def ws_set_entities_bulk(hass: HomeAssistant, connection: websocket_api.Ac
     connection.send_result(
         msg["id"],
         {"ok": True, "generated_file": generated_file, "restart_required": changed, "changed": changed, "count": len(entity_ids)},
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "gui_recorder/set_manual_exclusions",
+        vol.Required("yaml_text"): str,
+    }
+)
+async def ws_set_manual_exclusions(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    yaml_text = msg["yaml_text"]
+    try:
+        parse_manual_exclusions(yaml_text)
+    except ValueError as err:
+        connection.send_result(msg["id"], {"ok": False, "error": str(err)})
+        return
+
+    data = await async_reload_data(hass)
+    changed = data.get("manual_exclusions_yaml", "") != yaml_text
+    generated_file = None
+    if changed:
+        data["manual_exclusions_yaml"] = yaml_text
+        data["pending_restart"] = True
+        await async_save_data(hass, data)
+        generated_file = await async_write_yaml(hass)
+
+    connection.send_result(
+        msg["id"],
+        {"ok": True, "generated_file": generated_file, "restart_required": changed, "changed": changed},
     )
 
 
@@ -614,6 +646,7 @@ async def async_setup_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_entity)
     websocket_api.async_register_command(hass, ws_set_device)
     websocket_api.async_register_command(hass, ws_set_entities_bulk)
+    websocket_api.async_register_command(hass, ws_set_manual_exclusions)
     websocket_api.async_register_command(hass, ws_remove_exclusion)
     websocket_api.async_register_command(hass, ws_remove_unmatched_exclusions)
     websocket_api.async_register_command(hass, ws_set_global_options)

@@ -37,6 +37,9 @@ class GuiRecorderPanel extends HTMLElement {
     this._dataMessage = "";
     this._migration = {};
     this._migrationBusy = false;
+    this._manualExclusionsValue = "";
+    this._manualExclusionsError = "";
+    this._savingManualExclusions = false;
   }
 
   set hass(hass) {
@@ -74,6 +77,7 @@ class GuiRecorderPanel extends HTMLElement {
       this._commitIntervalValue = Number(result?.commit_interval ?? 5);
       this._autoUpdateDataValue = Boolean(result?.auto_update_data ?? true);
       this._repackAfterManualPurgeValue = Boolean(result?.repack_after_manual_purge ?? false);
+      this._manualExclusionsValue = result?.manual_exclusions_yaml || "";
       try {
         this._migration = await this._hass.connection.sendMessagePromise({ type: "gui_recorder/get_migration_status" });
       } catch (_err) {}
@@ -98,6 +102,7 @@ class GuiRecorderPanel extends HTMLElement {
     this._commitIntervalValue = Number(result?.commit_interval ?? this._commitIntervalValue ?? 5);
     this._autoUpdateDataValue = Boolean(result?.auto_update_data ?? this._autoUpdateDataValue ?? true);
     this._repackAfterManualPurgeValue = Boolean(result?.repack_after_manual_purge ?? this._repackAfterManualPurgeValue ?? false);
+    this._manualExclusionsValue = result?.manual_exclusions_yaml ?? this._manualExclusionsValue ?? "";
   }
 
   _formatNumber(value) {
@@ -342,6 +347,31 @@ class GuiRecorderPanel extends HTMLElement {
     }
   }
 
+  async _saveManualExclusions() {
+    this._manualExclusionsError = "";
+    this._savingManualExclusions = true;
+    this._render();
+    try {
+      const result = await this._hass.connection.sendMessagePromise({
+        type: "gui_recorder/set_manual_exclusions",
+        yaml_text: this._manualExclusionsValue || "",
+      });
+      if (result?.ok) {
+        this._message = result.changed
+          ? "Manual exclusions saved to gui_recorder.yaml. Restart Home Assistant to apply them."
+          : "No changes to save.";
+        await this._load();
+      } else {
+        this._manualExclusionsError = result?.error || "Could not save the manual exclusions.";
+      }
+    } catch (err) {
+      this._manualExclusionsError = err?.message || String(err);
+    } finally {
+      this._savingManualExclusions = false;
+      this._render();
+    }
+  }
+
   async _purgeAll() {
     if (this._isPurgeBusy()) return;
     if (!confirm(`This will purge recorder data older than the configured global retention (${this._keepDaysValue} day${Number(this._keepDaysValue) === 1 ? "" : "s"}). It will not delete recent data kept by the retention window. Continue?`)) return;
@@ -536,7 +566,10 @@ class GuiRecorderPanel extends HTMLElement {
       if (result?.ok) {
         if (type === "gui_recorder/import_legacy") {
           const imported = result.imported || {};
-          this._message = `Imported from existing configuration: ${imported.excluded_entities || 0} excluded entities and global recorder parameters.`;
+          const manualNote = imported.manual_exclusions
+            ? " Unsupported filters (domains/entity_globs/event_types) were copied into the Manual exclusions field — review them there."
+            : "";
+          this._message = `Imported from existing configuration: ${imported.excluded_entities || 0} excluded entities and global recorder parameters.${manualNote}`;
         } else if (type === "gui_recorder/disable_legacy") {
           this._message = "Previous recorder configuration disabled in configuration.yaml.";
         } else if (type === "gui_recorder/enable_gui") {
@@ -558,7 +591,8 @@ class GuiRecorderPanel extends HTMLElement {
   _migrationCardMarkup() {
     const m = this._migration || {};
     const lines = this._migrationSummaryLines();
-    const hasUnsupported = ((m.legacy_summary?.exclude_domains_count || 0) + (m.legacy_summary?.exclude_globs_count || 0) + (m.legacy_summary?.include_entities_count || 0) + (m.legacy_summary?.include_domains_count || 0) + (m.legacy_summary?.include_globs_count || 0)) > 0;
+    const hasUnsupported = ((m.legacy_summary?.exclude_domains_count || 0) + (m.legacy_summary?.exclude_globs_count || 0) + (m.legacy_summary?.exclude_event_types_count || 0) + (m.legacy_summary?.include_entities_count || 0) + (m.legacy_summary?.include_domains_count || 0) + (m.legacy_summary?.include_globs_count || 0)) > 0;
+    const includeEntitiesLost = (m.legacy_summary?.include_entities_count || 0) > 0;
     if (!m.legacy_detected && m.gui_ready) return '';
 
     return `
@@ -569,7 +603,7 @@ class GuiRecorderPanel extends HTMLElement {
         ${m.legacy_detected ? `
           <div class="message warn"><strong>Existing recorder configuration detected.</strong> ${m.legacy_source_path ? `Source: <code>${this._escapeHtml(m.legacy_source_path)}</code>.` : ''}</div>
           ${lines.length ? `<div class="row-note" style="margin:10px 0 12px;">Detected values: ${lines.map((l) => `<code>${this._escapeHtml(l)}</code>`).join(' · ')}</div>` : ''}
-          ${hasUnsupported ? `<div class="message warn"><strong>GUI Recorder is entity-level only.</strong> Domain filters, entity globs, event_types, and <code>include.*</code> from your legacy configuration are <strong>not</strong> imported and will <strong>not</strong> be managed by the GUI. If your setup relies on those filters, copy them to a separate file before completing migration — they will be lost once <code>gui_recorder.yaml</code> becomes the active recorder source.</div>` : ''}
+          ${hasUnsupported ? `<div class="message warn"><strong>Some legacy filters are not entity-level.</strong> <code>exclude.domains</code>, <code>exclude.entity_globs</code>, <code>exclude.event_types</code>, <code>include.domains</code> and <code>include.entity_globs</code> are copied automatically into the "Manual exclusions" field below when you import — review them there before completing migration.${includeEntitiesLost ? ` <code>include.entities</code> (allow-list mode) is not supported by GUI Recorder and will be lost.` : ''}</div>` : ''}
         ` : `<div class="message">No legacy recorder configuration was detected for import.</div>`}
 
         <div class="steps">
@@ -656,6 +690,7 @@ class GuiRecorderPanel extends HTMLElement {
         h1, h2, h3 { margin:0 0 12px; }
         h3 { font-size:1rem; }
         input[type="search"], input[type="number"] { width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--divider-color); background:var(--primary-background-color); color:var(--primary-text-color); box-sizing:border-box; }
+        textarea { width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--divider-color); background:var(--primary-background-color); color:var(--primary-text-color); box-sizing:border-box; font-family:var(--code-font-family, monospace); font-size:0.9rem; resize:vertical; }
         .message { margin-top:12px; color:var(--secondary-text-color); }
         .message.warn { color: var(--warning-color, #ff9800); }
         .message.ok { color: var(--success-color, #43a047); }
@@ -759,6 +794,19 @@ class GuiRecorderPanel extends HTMLElement {
             <button class="action-button" id="save-global-options" ${this._savingGlobal ? "disabled" : ""}>${this._savingGlobal ? "Saving…" : "Save global configuration"}</button>
           </div>
           <div class="row-note" style="margin-top:8px;">This will be written to <code>gui_recorder.yaml</code> and applied after a Home Assistant restart.</div>
+        </div>
+
+        <div class="card">
+          <h2>Manual exclusions (advanced)</h2>
+          <div class="row-note" style="margin-bottom:10px;">
+            Raw YAML merged into the generated <code>gui_recorder.yaml</code>. Only <code>exclude.domains</code>, <code>exclude.entity_globs</code>, <code>exclude.event_types</code>, <code>include.domains</code> and <code>include.entity_globs</code> are allowed here.
+            Individual entities are managed exclusively through the device/entity toggles below — do not list <code>entities</code> in this block.
+          </div>
+          <textarea id="manual-exclusions" rows="8" spellcheck="false" placeholder="exclude:&#10;  domains:&#10;    - sensor&#10;  entity_globs:&#10;    - sensor.weather_*">${this._escapeHtml(this._manualExclusionsValue)}</textarea>
+          <div class="setting-actions" style="margin-top:12px;">
+            <button class="action-button" id="save-manual-exclusions" ${this._savingManualExclusions ? "disabled" : ""}>${this._savingManualExclusions ? "Saving…" : "Save manual exclusions"}</button>
+          </div>
+          ${this._manualExclusionsError ? `<div class="message warn">${this._escapeHtml(this._manualExclusionsError)}</div>` : ""}
         </div>
 
         <div class="card">
@@ -1045,6 +1093,8 @@ class GuiRecorderPanel extends HTMLElement {
     this.shadowRoot.getElementById("purge-keep-days")?.addEventListener("input", (ev) => { this._keepDaysValue = ev.target.value; });
     this.shadowRoot.getElementById("commit-interval")?.addEventListener("input", (ev) => { this._commitIntervalValue = ev.target.value; });
     this.shadowRoot.getElementById("save-global-options")?.addEventListener("click", () => this._saveGlobalOptions());
+    this.shadowRoot.getElementById("manual-exclusions")?.addEventListener("input", (ev) => { this._manualExclusionsValue = ev.target.value; });
+    this.shadowRoot.getElementById("save-manual-exclusions")?.addEventListener("click", () => this._saveManualExclusions());
 
     this.shadowRoot.getElementById("devices-select-all")?.addEventListener("click", () => this._setEntitiesBulk(visibleDeviceEntityIds, true, "bulk:devices:select"));
     this.shadowRoot.getElementById("devices-deselect-all")?.addEventListener("click", () => this._setEntitiesBulk(visibleDeviceEntityIds, false, "bulk:devices:deselect"));

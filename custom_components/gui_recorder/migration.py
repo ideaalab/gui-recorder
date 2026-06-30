@@ -140,6 +140,21 @@ def _extract_summary_from_recorder_config(recorder_cfg: dict[str, Any] | None) -
             "commit_interval": recorder_cfg.get("commit_interval"),
             "excluded_entities": list(exclude.get("entities") or []),
         },
+        # Filters GUI Recorder doesn't manage per-entity but can still carry over
+        # verbatim into the manual exclusions block (exclude/include entities are
+        # explicitly excluded - those stay exclusive to the entity toggles).
+        "unsupported_filters": {
+            "exclude": {
+                key: list(exclude.get(key) or [])
+                for key in ("domains", "entity_globs", "event_types")
+                if exclude.get(key)
+            },
+            "include": {
+                key: list(include.get(key) or [])
+                for key in ("domains", "entity_globs")
+                if include.get(key)
+            },
+        },
     }
 
 
@@ -300,6 +315,7 @@ def _import_legacy_sync(hass: HomeAssistant) -> dict[str, Any]:
 
     summary = status.get("legacy_summary") or {}
     supported = summary.get("supported_import") or {}
+    unsupported_filters = summary.get("unsupported_filters") or {}
 
     updates: dict[str, Any] = {
         "excluded_entities": sorted(set(supported.get("excluded_entities") or [])),
@@ -316,6 +332,19 @@ def _import_legacy_sync(hass: HomeAssistant) -> dict[str, Any]:
         value = supported.get(key)
         if value is not None:
             updates[key] = bool(value)
+
+    # Domain/glob/event_type filters can't be managed per-entity, but unlike
+    # entities they can be carried over verbatim as YAML into the manual
+    # exclusions block instead of being silently dropped on migration.
+    manual_block = {section: keys for section, keys in unsupported_filters.items() if keys}
+    manual_yaml = ""
+    if manual_block:
+        manual_yaml = (
+            "# Imported automatically from the legacy recorder configuration.\n"
+            "# Review before relying on this - confirm it still matches your setup.\n"
+            + yaml.safe_dump(manual_block, sort_keys=True, default_flow_style=False)
+        )
+    updates["manual_exclusions_yaml"] = manual_yaml
 
     unsupported = {
         "exclude_domains_count": summary.get("exclude_domains_count", 0),
@@ -335,6 +364,7 @@ def _import_legacy_sync(hass: HomeAssistant) -> dict[str, Any]:
             "auto_purge": updates.get("auto_purge"),
             "auto_repack": updates.get("auto_repack"),
             "commit_interval": updates.get("commit_interval"),
+            "manual_exclusions": bool(manual_block),
         },
         "unsupported": unsupported,
         "source": status.get("legacy_source_path"),
