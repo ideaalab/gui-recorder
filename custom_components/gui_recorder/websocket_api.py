@@ -279,6 +279,38 @@ async def ws_set_device(hass: HomeAssistant, connection: websocket_api.ActiveCon
     connection.send_result(msg["id"], {"ok": True, "generated_file": generated_file, "restart_required": changed, "changed": changed})
 
 
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "gui_recorder/set_entities_bulk",
+        vol.Required("entity_ids"): [str],
+        vol.Required("recorded"): bool,
+    }
+)
+async def ws_set_entities_bulk(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    data = await async_reload_data(hass)
+    excluded = set(_normalize_excluded(data.get("excluded_entities", [])))
+    before = set(excluded)
+    entity_ids = {_normalize_entity_id(entity_id) for entity_id in msg["entity_ids"]}
+
+    if msg["recorded"]:
+        excluded -= entity_ids
+    else:
+        excluded |= entity_ids
+
+    changed = excluded != before
+    generated_file = None
+    if changed:
+        data["excluded_entities"] = _normalize_excluded(excluded)
+        data["pending_restart"] = True
+        await async_save_data(hass, data)
+        generated_file = await async_write_yaml(hass)
+
+    connection.send_result(
+        msg["id"],
+        {"ok": True, "generated_file": generated_file, "restart_required": changed, "changed": changed, "count": len(entity_ids)},
+    )
 
 
 @websocket_api.require_admin
@@ -557,6 +589,7 @@ async def async_setup_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_tree)
     websocket_api.async_register_command(hass, ws_set_entity)
     websocket_api.async_register_command(hass, ws_set_device)
+    websocket_api.async_register_command(hass, ws_set_entities_bulk)
     websocket_api.async_register_command(hass, ws_remove_exclusion)
     websocket_api.async_register_command(hass, ws_remove_unmatched_exclusions)
     websocket_api.async_register_command(hass, ws_set_global_options)

@@ -176,6 +176,11 @@ class GuiRecorderPanel extends HTMLElement {
     return device.entities.some((e) => this._entityMatches(e));
   }
 
+  _deviceVisibleEntities(device) {
+    const visibleEntities = device.entities.filter((e) => this._entityMatches(e));
+    return visibleEntities.length ? visibleEntities : device.entities;
+  }
+
   _deviceState(device) {
     const visibleEntities = device.entities.filter((e) => this._entityMatches(e));
     const entities = visibleEntities.length ? visibleEntities : device.entities;
@@ -226,6 +231,25 @@ class GuiRecorderPanel extends HTMLElement {
       this._render();
     } finally {
       this._pending.delete(`device:${deviceId}`);
+      this._render();
+    }
+  }
+
+  async _setEntitiesBulk(entityIds, recorded, busyKey) {
+    if (!entityIds.length || this._pending.has(busyKey)) return;
+    const verb = recorded ? "Enabling" : "Disabling";
+    if (!confirm(`${verb} recording for ${entityIds.length} entities. Continue?`)) return;
+    this._pending.add(busyKey);
+    this._render();
+    try {
+      await this._hass.connection.sendMessagePromise({ type: "gui_recorder/set_entities_bulk", entity_ids: entityIds, recorded });
+      this._message = `${recorded ? "Enabled" : "Disabled"} recording for ${entityIds.length} entities. Restart Home Assistant to apply them.`;
+      await this._load();
+    } catch (err) {
+      this._message = `Could not update entities: ${err?.message || err}`;
+      this._render();
+    } finally {
+      this._pending.delete(busyKey);
       this._render();
     }
   }
@@ -609,6 +633,8 @@ class GuiRecorderPanel extends HTMLElement {
 
     const filteredDevices = (this._data.devices || []).filter((d) => this._deviceMatches(d));
     const filteredOrphans = (this._data.orphans || []).filter((e) => this._entityMatches(e));
+    const visibleDeviceEntityIds = filteredDevices.flatMap((d) => this._deviceVisibleEntities(d).map((e) => e.entity_id));
+    const visibleOrphanEntityIds = filteredOrphans.map((e) => e.entity_id);
     const filteredObsolete = (this._data.obsolete || []).filter((e) => this._entityMatches(e));
     const filteredUnmatchedExclusions = (this._data.unmatched_exclusions || []).filter((e) => !this._filter || String(e).toLowerCase().includes(this._filter.toLowerCase()));
     const stats = this._data.stats || {};
@@ -816,12 +842,17 @@ class GuiRecorderPanel extends HTMLElement {
         </div>
 
         <div class="card">
-          <h2>Devices</h2>
+          <div class="orphans-head">
+            <h2>Devices</h2>
+            <div class="actions-cell">
+              <button class="mini-button" id="devices-select-all" ${!visibleDeviceEntityIds.length || this._pending.has("bulk:devices:select") ? "disabled" : ""}>Select all</button>
+              <button class="mini-button" id="devices-deselect-all" ${!visibleDeviceEntityIds.length || this._pending.has("bulk:devices:deselect") ? "disabled" : ""}>Deselect all</button>
+            </div>
+          </div>
           ${filteredDevices.length === 0 ? `<div>No devices to display.</div>` : filteredDevices.map((device) => {
             const state = this._deviceState(device);
             const expanded = this._expanded.has(device.device_id);
-            const visibleEntities = device.entities.filter((e) => this._entityMatches(e));
-            const entities = visibleEntities.length ? visibleEntities : device.entities;
+            const entities = this._deviceVisibleEntities(device);
             const deviceBusy = this._pending.has(`device:${device.device_id}`);
             const devicePurgeBusy = this._pending.has(`purge-device:${device.device_id}`);
             return `
@@ -877,7 +908,14 @@ class GuiRecorderPanel extends HTMLElement {
         </div>
 
         <div class="card">
-          <div class="orphans-head"><h2>Entities without a device</h2><div class="subtle">${filteredOrphans.length}</div></div>
+          <div class="orphans-head">
+            <h2>Entities without a device</h2>
+            <div class="actions-cell">
+              <div class="subtle">${filteredOrphans.length}</div>
+              <button class="mini-button" id="orphans-select-all" ${!visibleOrphanEntityIds.length || this._pending.has("bulk:orphans:select") ? "disabled" : ""}>Select all</button>
+              <button class="mini-button" id="orphans-deselect-all" ${!visibleOrphanEntityIds.length || this._pending.has("bulk:orphans:deselect") ? "disabled" : ""}>Deselect all</button>
+            </div>
+          </div>
           ${filteredOrphans.length === 0 ? `<div>No unassigned entities.</div>` : `
             <table>
               <thead>
@@ -1007,6 +1045,11 @@ class GuiRecorderPanel extends HTMLElement {
     this.shadowRoot.getElementById("purge-keep-days")?.addEventListener("input", (ev) => { this._keepDaysValue = ev.target.value; });
     this.shadowRoot.getElementById("commit-interval")?.addEventListener("input", (ev) => { this._commitIntervalValue = ev.target.value; });
     this.shadowRoot.getElementById("save-global-options")?.addEventListener("click", () => this._saveGlobalOptions());
+
+    this.shadowRoot.getElementById("devices-select-all")?.addEventListener("click", () => this._setEntitiesBulk(visibleDeviceEntityIds, true, "bulk:devices:select"));
+    this.shadowRoot.getElementById("devices-deselect-all")?.addEventListener("click", () => this._setEntitiesBulk(visibleDeviceEntityIds, false, "bulk:devices:deselect"));
+    this.shadowRoot.getElementById("orphans-select-all")?.addEventListener("click", () => this._setEntitiesBulk(visibleOrphanEntityIds, true, "bulk:orphans:select"));
+    this.shadowRoot.getElementById("orphans-deselect-all")?.addEventListener("click", () => this._setEntitiesBulk(visibleOrphanEntityIds, false, "bulk:orphans:deselect"));
 
     this.shadowRoot.querySelectorAll("[data-toggle-device]").forEach((el) => {
       el.addEventListener("click", (ev) => {
