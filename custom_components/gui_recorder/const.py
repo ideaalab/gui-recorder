@@ -28,4 +28,4 @@ PANEL_TITLE = "GUI Recorder"
 PANEL_ICON = "mdi:database-cog"
 PANEL_MODULE_URL = "/api/gui_recorder/static/gui-recorder-panel.js"
 
-INTEGRATION_VERSION = "0.8.32"
+INTEGRATION_VERSION = "0.8.33"

@@ -48,7 +48,12 @@ class GuiRecorderPanel extends HTMLElement {
       this._loaded = true;
       this._load();
     }
-    this._render();
+    // Do NOT re-render here: HA invokes this setter on every entity state
+    // change in the whole system. The render is a pure function of our own
+    // state (_data from WS, _filter, _migration, etc.) and never reads from
+    // hass.states, so rebuilding the shadow DOM many times per second would
+    // be wasted work AND destroys focus/selection on any input (textarea,
+    // filter). _render() is invoked explicitly after our own state changes.
   }
 
   set narrow(narrow) {
