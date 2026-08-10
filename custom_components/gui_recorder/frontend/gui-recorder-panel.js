@@ -554,6 +554,7 @@ class GuiRecorderPanel extends HTMLElement {
     if (s.auto_repack != null) lines.push(`auto_repack: ${s.auto_repack}`);
     if (s.purge_keep_days != null) lines.push(`purge_keep_days: ${s.purge_keep_days}`);
     if (s.commit_interval != null) lines.push(`commit_interval: ${s.commit_interval}`);
+    if (s.db_url) lines.push(`db_url: ${s.db_url}`);
     if (s.exclude_entities_count) lines.push(`exclude.entities: ${s.exclude_entities_count}`);
     if (s.exclude_domains_count) lines.push(`exclude.domains: ${s.exclude_domains_count}`);
     if (s.exclude_globs_count) lines.push(`exclude.entity_globs: ${s.exclude_globs_count}`);
@@ -574,7 +575,10 @@ class GuiRecorderPanel extends HTMLElement {
           const manualNote = imported.manual_exclusions
             ? " Unsupported filters (domains/entity_globs/event_types) were copied into the Manual exclusions field — review them there."
             : "";
-          this._message = `Imported from existing configuration: ${imported.excluded_entities || 0} excluded entities and global recorder parameters.${manualNote}`;
+          const dbNote = imported.db_url
+            ? ` Custom database location preserved (${imported.db_url}).`
+            : "";
+          this._message = `Imported from existing configuration: ${imported.excluded_entities || 0} excluded entities and global recorder parameters.${dbNote}${manualNote}`;
         } else if (type === "gui_recorder/disable_legacy") {
           this._message = "Previous recorder configuration disabled in configuration.yaml.";
         } else if (type === "gui_recorder/enable_gui") {

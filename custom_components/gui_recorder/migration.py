@@ -126,6 +126,7 @@ def _extract_summary_from_recorder_config(recorder_cfg: dict[str, Any] | None) -
         "auto_repack": recorder_cfg.get("auto_repack"),
         "purge_keep_days": recorder_cfg.get("purge_keep_days"),
         "commit_interval": recorder_cfg.get("commit_interval"),
+        "db_url": recorder_cfg.get("db_url"),
         "exclude_entities_count": len(exclude.get("entities") or []),
         "exclude_domains_count": len(exclude.get("domains") or []),
         "exclude_globs_count": len(exclude.get("entity_globs") or []),
@@ -138,6 +139,7 @@ def _extract_summary_from_recorder_config(recorder_cfg: dict[str, Any] | None) -
             "auto_repack": recorder_cfg.get("auto_repack"),
             "purge_keep_days": recorder_cfg.get("purge_keep_days"),
             "commit_interval": recorder_cfg.get("commit_interval"),
+            "db_url": recorder_cfg.get("db_url"),
             "excluded_entities": list(exclude.get("entities") or []),
         },
         # Filters GUI Recorder doesn't manage per-entity but can still carry over
@@ -333,6 +335,16 @@ def _import_legacy_sync(hass: HomeAssistant) -> dict[str, Any]:
         if value is not None:
             updates[key] = bool(value)
 
+    # Preserve a custom SQLite db_url (e.g. a database moved to /share). The
+    # recorder only reads db_url from its own config, so dropping it on migration
+    # made HA silently start a fresh empty DB at the default path. Only carry over
+    # sqlite URLs - non-sqlite backends can't reach this point anyway (setup aborts
+    # on them), but guard defensively.
+    db_url = supported.get("db_url")
+    if isinstance(db_url, str) and db_url.strip():
+        if db_url.strip().lower().startswith("sqlite"):
+            updates["db_url"] = db_url.strip()
+
     # Domain/glob/event_type filters can't be managed per-entity, but unlike
     # entities they can be carried over verbatim as YAML into the manual
     # exclusions block instead of being silently dropped on migration.
@@ -365,6 +377,7 @@ def _import_legacy_sync(hass: HomeAssistant) -> dict[str, Any]:
             "auto_repack": updates.get("auto_repack"),
             "commit_interval": updates.get("commit_interval"),
             "manual_exclusions": bool(manual_block),
+            "db_url": updates.get("db_url"),
         },
         "unsupported": unsupported,
         "source": status.get("legacy_source_path"),

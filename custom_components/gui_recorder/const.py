@@ -4,6 +4,7 @@ STORAGE_KEY = f"{DOMAIN}.data"
 DEFAULT_STORAGE = {
     "excluded_entities": [],
     "manual_exclusions_yaml": "",
+    "db_url": None,
     "generated_path": "gui_recorder.yaml",
     "mode": "exclude_entities",
     "pending_restart": False,
@@ -28,4 +29,4 @@ PANEL_TITLE = "GUI Recorder"
 PANEL_ICON = "mdi:database-cog"
 PANEL_MODULE_URL = "/api/gui_recorder/static/gui-recorder-panel.js"
 
-INTEGRATION_VERSION = "0.8.35"
+INTEGRATION_VERSION = "0.8.36"
