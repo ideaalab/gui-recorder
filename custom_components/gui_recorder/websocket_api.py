@@ -614,10 +614,30 @@ async def ws_import_legacy(hass: HomeAssistant, connection: websocket_api.Active
     connection.send_result(msg["id"], result)
 
 
+_IMPORT_REQUIRED_ERROR = (
+    "Import the detected configuration first (Step 1). Disabling the legacy recorder "
+    "block without importing would replace your settings - including a custom db_url - "
+    "with defaults, and Home Assistant would start a new empty database."
+)
+
+
+async def _async_import_pending(hass: HomeAssistant) -> bool:
+    """True if a legacy recorder config exists but hasn't been imported yet.
+
+    Running steps 2/3 in that state silently replaces the user's recorder config
+    with GUI Recorder's defaults, so both are blocked until Step 1 has run.
+    """
+    status = await async_detect_sync_status(hass)
+    return bool(status.get("legacy_detected")) and not status.get("legacy_imported_at")
+
+
 @websocket_api.require_admin
 @websocket_api.async_response
 @websocket_api.websocket_command({vol.Required("type"): "gui_recorder/disable_legacy"})
 async def ws_disable_legacy(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    if await _async_import_pending(hass):
+        connection.send_result(msg["id"], {"ok": False, "error": _IMPORT_REQUIRED_ERROR})
+        return
     result = await async_disable_legacy(hass)
     if result.get("ok"):
         data = await async_reload_data(hass)
@@ -631,6 +651,9 @@ async def ws_disable_legacy(hass: HomeAssistant, connection: websocket_api.Activ
 @websocket_api.async_response
 @websocket_api.websocket_command({vol.Required("type"): "gui_recorder/enable_gui"})
 async def ws_enable_gui(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    if await _async_import_pending(hass):
+        connection.send_result(msg["id"], {"ok": False, "error": _IMPORT_REQUIRED_ERROR})
+        return
     result = await async_ensure_gui_enabled(hass)
     if result.get("ok"):
         await async_write_yaml(hass)

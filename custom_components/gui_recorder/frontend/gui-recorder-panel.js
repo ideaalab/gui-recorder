@@ -602,6 +602,9 @@ class GuiRecorderPanel extends HTMLElement {
     const lines = this._migrationSummaryLines();
     const hasUnsupported = ((m.legacy_summary?.exclude_domains_count || 0) + (m.legacy_summary?.exclude_globs_count || 0) + (m.legacy_summary?.exclude_event_types_count || 0) + (m.legacy_summary?.include_entities_count || 0) + (m.legacy_summary?.include_domains_count || 0) + (m.legacy_summary?.include_globs_count || 0)) > 0;
     const includeEntitiesLost = (m.legacy_summary?.include_entities_count || 0) > 0;
+    // Steps 2/3 must not run before the import: they would replace the user's
+    // recorder config (exclusions, retention, a custom db_url) with defaults.
+    const importRequired = m.legacy_detected === true && !m.legacy_imported_at;
     if (!m.legacy_detected && m.gui_ready) return '';
 
     return `
@@ -625,13 +628,15 @@ class GuiRecorderPanel extends HTMLElement {
           <div class="step ${m.legacy_active ? '' : 'done'}">
             <div class="step-title">Step 2: Disable previous recorder config${!m.legacy_active ? '<span class="step-check" aria-label="completed">✓</span>' : ''}</div>
             <div class="row-note">Comment the active <code>recorder:</code> block in <code>configuration.yaml</code> and create an automatic backup.</div>
-            <button class="action-button" id="migration-disable" ${!m.legacy_active || this._migrationBusy ? 'disabled' : ''}>Disable current recorder config</button>
+            ${importRequired ? `<div class="row-note" style="margin-bottom:8px;"><strong>Complete Step 1 first.</strong> Disabling the legacy block before importing would replace your recorder settings with defaults.</div>` : ''}
+            <button class="action-button" id="migration-disable" ${!m.legacy_active || importRequired || this._migrationBusy ? 'disabled' : ''}>Disable current recorder config</button>
           </div>
 
           <div class="step ${m.gui_include_active ? 'done' : ''}">
             <div class="step-title">Step 3: Enable GUI Recorder${m.gui_include_active ? '<span class="step-check" aria-label="completed">✓</span>' : ''}</div>
             <div class="row-note">Add <code>recorder: !include gui_recorder.yaml</code> if it is missing.</div>
-            <button class="action-button" id="migration-enable" ${m.gui_include_active || this._migrationBusy ? 'disabled' : ''}>Enable gui_recorder.yaml</button>
+            ${importRequired ? `<div class="row-note" style="margin-bottom:8px;"><strong>Complete Step 1 first.</strong></div>` : ''}
+            <button class="action-button" id="migration-enable" ${m.gui_include_active || importRequired || this._migrationBusy ? 'disabled' : ''}>Enable gui_recorder.yaml</button>
           </div>
         </div>
       </div>
