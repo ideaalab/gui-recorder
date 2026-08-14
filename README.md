@@ -70,6 +70,32 @@ recorder: !include gui_recorder.yaml
 
 The integration writes that file automatically. If you already had a `recorder:` block in `configuration.yaml`, the panel's migration flow guides you through replacing it.
 
+## Uninstalling
+
+Removing the integration doesn't touch your recorder database or delete any data — GUI Recorder only ever reads it. The generated `gui_recorder.yaml` also lives in your config directory, not inside the integration, so it isn't removed either: `recorder: !include gui_recorder.yaml` is plain Home Assistant YAML and keeps working with the integration gone, so your current recording behavior is preserved either way.
+
+To leave `configuration.yaml` clean (recommended), fold `gui_recorder.yaml` back into a plain inline `recorder:` block instead of leaving it pointed at a generated file:
+
+1. Open `gui_recorder.yaml` and copy everything **below** the two `#` comment lines at the top.
+2. In `configuration.yaml`, replace:
+   ```yaml
+   recorder: !include gui_recorder.yaml
+   ```
+   with `recorder:` followed by that copied content, indented one level underneath, e.g.:
+   ```yaml
+   recorder:
+     auto_purge: true
+     auto_repack: true
+     purge_keep_days: 10
+     commit_interval: 5
+     exclude:
+       entities:
+         - sensor.example
+   ```
+3. Remove the integration: **Settings → Devices & services → GUI Recorder → Delete**. For a manual install, also delete `custom_components/gui_recorder/`.
+4. Restart Home Assistant and confirm everything looks right.
+5. Optional cleanup, only after confirming the restart worked: delete `gui_recorder.yaml` and `.storage/gui_recorder.data`. Neither is required — they're harmless if left in place, and `.storage/gui_recorder.data` lets a future reinstall pick up right where you left off.
+
 ## Requirements
 
 - Home Assistant **2024.1.0** or later.
