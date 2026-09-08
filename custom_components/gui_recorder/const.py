@@ -4,6 +4,11 @@ STORAGE_KEY = f"{DOMAIN}.data"
 MODE_EXCLUDE = "exclude_entities"
 MODE_INCLUDE = "include_entities"
 
+# The two entity lists live in their own files next to the generated yaml, so both
+# stay visible on disk and switching mode only changes which one is !include'd.
+EXCLUDED_LIST_FILENAME = "gui_recorder_excluded_entities.yaml"
+INCLUDED_LIST_FILENAME = "gui_recorder_included_entities.yaml"
+
 DEFAULT_STORAGE = {
     "excluded_entities": [],
     "included_entities": [],

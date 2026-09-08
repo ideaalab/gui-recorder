@@ -880,7 +880,7 @@ Your include list (${includeCount} entries) is kept and comes back if you switch
         <div class="card">
           <h2>Recording mode</h2>
           <div class="row-note" style="margin-bottom:12px;">
-            This decides what the entity toggles below write into <code>gui_recorder.yaml</code>. Both lists are stored separately, so switching between modes never deletes the other one.
+            This decides what the entity toggles below write. Each list lives in its own file next to <code>gui_recorder.yaml</code> — <code>gui_recorder_excluded_entities.yaml</code> and <code>gui_recorder_included_entities.yaml</code> — and both are kept up to date whichever mode is active. Switching only changes which of the two <code>gui_recorder.yaml</code> points at, so nothing is ever thrown away.
           </div>
           <div class="mode-options">
             <label class="mode-option ${includeMode ? "" : "selected"}">

@@ -6,7 +6,7 @@ import yaml
 
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, MODE_INCLUDE
+from .const import DOMAIN, EXCLUDED_LIST_FILENAME, INCLUDED_LIST_FILENAME, MODE_INCLUDE
 
 _ALLOWED_EXCLUDE_KEYS = ("domains", "entity_globs", "event_types")
 _ALLOWED_INCLUDE_KEYS = ("domains", "entity_globs")
@@ -65,13 +65,47 @@ def parse_manual_exclusions(text: str) -> dict[str, dict[str, list[str]]]:
     return result
 
 
+def _dump_entity_list_file(entities: list[str], what: str) -> str:
+    """One entity id per line, as a plain YAML list.
+
+    An empty list must be written as an explicit "[]": an empty file makes
+    !include return None and the recorder schema expects a list.
+    """
+    header = (
+        f"# Entities {what} - managed by the GUI Recorder integration.\n"
+        "# Manual edits will be overwritten. Referenced from gui_recorder.yaml.\n"
+    )
+    if not entities:
+        return header + "[]\n"
+    return header + yaml.safe_dump(entities, default_flow_style=False).rstrip() + "\n"
+
+
+def _emit_filter_block(name: str, include_target: str | None, manual_keys: dict[str, list[str]]) -> str:
+    """Render an exclude:/include: block.
+
+    The entities list is an !include of its own file, which safe_dump cannot emit
+    (it would quote the tag), so that one line is written by hand and the manual
+    keys are dumped underneath it and indented.
+    """
+    if not include_target and not manual_keys:
+        return f"{name}: {{}}"
+    lines = [f"{name}:"]
+    if include_target:
+        lines.append(f"  entities: !include {include_target}")
+    if manual_keys:
+        dumped = yaml.safe_dump(manual_keys, sort_keys=False, default_flow_style=False).rstrip()
+        lines.extend(f"  {line}" for line in dumped.splitlines())
+    return "\n".join(lines)
+
 async def async_write_yaml(hass: HomeAssistant) -> str:
     data = hass.data[DOMAIN]["data"]
     generated_path = data.get("generated_path", "gui_recorder.yaml")
     include_mode = data.get("mode") == MODE_INCLUDE
-    # Only the active list is written. The other one stays in storage untouched,
-    # so switching modes back and forth never loses a selection.
-    managed_entities = sorted(set(data.get("included_entities" if include_mode else "excluded_entities", [])))
+    # Both lists are written to their own file every time; only the active one is
+    # referenced from the generated yaml, so switching modes never loses a selection
+    # and the user can see both files sitting in the config folder.
+    excluded_entities = sorted(set(data.get("excluded_entities", [])))
+    included_entities = sorted(set(data.get("included_entities", [])))
     purge_keep_days = int(data.get("purge_keep_days", 10))
     auto_purge = bool(data.get("auto_purge", True))
     auto_repack = bool(data.get("auto_repack", True))
@@ -93,22 +127,16 @@ async def async_write_yaml(hass: HomeAssistant) -> str:
     # (e.g. globs starting with '*' which YAML would otherwise parse as alias
     # references and reject — see https://github.com/ideaalab/gui-recorder).
     manual_exclude = manual.get("exclude", {})
-    exclude_block: dict[str, list[str]] = {}
-    if managed_entities and not include_mode:
-        exclude_block["entities"] = managed_entities
-    for key in _ALLOWED_EXCLUDE_KEYS:
-        if manual_exclude.get(key):
-            exclude_block[key] = manual_exclude[key]
+    manual_exclude_keys = {key: manual_exclude[key] for key in _ALLOWED_EXCLUDE_KEYS if manual_exclude.get(key)}
 
     manual_include = manual.get("include", {})
-    include_block: dict[str, list[str]] = {}
-    if managed_entities and include_mode:
-        # include.entities has the highest precedence in the recorder filter, so an
-        # entity listed here is recorded even when a manual exclude glob matches it.
-        include_block["entities"] = managed_entities
-    for key in _ALLOWED_INCLUDE_KEYS:
-        if manual_include.get(key):
-            include_block[key] = manual_include[key]
+    manual_include_keys = {key: manual_include[key] for key in _ALLOWED_INCLUDE_KEYS if manual_include.get(key)}
+
+    # Only the active list is referenced. In include mode the entities go under
+    # include.entities, the highest precedence rule of the recorder filter, so they
+    # are recorded even when one of the user's own exclude globs matches them.
+    exclude_target = None if include_mode else EXCLUDED_LIST_FILENAME
+    include_target = INCLUDED_LIST_FILENAME if include_mode else None
 
     parts: list[str] = []
     parts.append("# This file is managed by the GUI Recorder integration.")
@@ -126,15 +154,22 @@ async def async_write_yaml(hass: HomeAssistant) -> str:
         parts.append(yaml.safe_dump({"db_url": db_url.strip()}, default_flow_style=False).rstrip())
     parts.append("")
 
-    if exclude_block:
-        parts.append(yaml.safe_dump({"exclude": exclude_block}, sort_keys=False, default_flow_style=False).rstrip())
-    else:
-        parts.append("exclude: {}")
+    parts.append(_emit_filter_block("exclude", exclude_target, manual_exclude_keys))
 
-    if include_block:
+    if include_target or manual_include_keys:
         parts.append("")
-        parts.append(yaml.safe_dump({"include": include_block}, sort_keys=False, default_flow_style=False).rstrip())
+        parts.append(_emit_filter_block("include", include_target, manual_include_keys))
 
     content = "\n".join(parts) + "\n"
-    await hass.async_add_executor_job(path.write_text, content, "utf-8")
+
+    def _write_all() -> None:
+        path.write_text(content, "utf-8")
+        (path.parent / EXCLUDED_LIST_FILENAME).write_text(
+            _dump_entity_list_file(excluded_entities, "NOT recorded (exclude list)"), "utf-8"
+        )
+        (path.parent / INCLUDED_LIST_FILENAME).write_text(
+            _dump_entity_list_file(included_entities, "recorded (include list)"), "utf-8"
+        )
+
+    await hass.async_add_executor_job(_write_all)
     return str(path)

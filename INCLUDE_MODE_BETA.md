@@ -32,9 +32,25 @@ an entity you switch on is recorded even when one of your own exclude globs matc
 
 ## Nothing is destroyed when you switch
 
-Both lists are stored side by side in `.storage/gui_recorder.data`
-(`excluded_entities` and `included_entities`). Only the active one is written to
-`gui_recorder.yaml`; the other stays untouched and comes back if you switch again.
+Each list has its own file in the config folder, and **both are rewritten on every
+save, whichever mode is active**:
+
+```
+gui_recorder.yaml                      general settings + the filter blocks
+gui_recorder_excluded_entities.yaml    the exclude list
+gui_recorder_included_entities.yaml    the include list
+```
+
+`gui_recorder.yaml` pulls in whichever one the current mode uses:
+
+```yaml
+exclude:
+  entities: !include gui_recorder_excluded_entities.yaml
+```
+
+Switching mode changes that one line. The other file stays on disk with its contents
+intact, so you can open the folder and see for yourself that nothing was deleted.
+Filters typed in the Manual exclusions field stay in `gui_recorder.yaml` in both modes.
 
 The first time you switch to include mode, the list is seeded with everything you are
 recording right now, so the switch does not silently stop recording. Entities that are
@@ -51,8 +67,12 @@ choose include mode explicitly.
    makes it record again after a restart. This is the case from #18.
 4. Switching back to exclude mode restores the previous exclude list intact.
 5. "Purge non-recorded entities" in include mode targets everything outside the include list.
-6. The generated `gui_recorder.yaml` looks right in both modes — in include mode it must
-   contain no `exclude.entities` block.
+6. The generated files look right in both modes: in include mode `gui_recorder.yaml`
+   must reference `gui_recorder_included_entities.yaml` and contain no
+   `exclude.entities`, and **both** entity files must still be there with their content.
+7. Deleting one of the two entity files by hand breaks the recorder config until the
+   integration rewrites it (it does so on every start and on every save). Worth knowing;
+   don't delete them.
 
 Report anything odd on the issue tracker or the community thread, mentioning that you are
 running the `include-mode` branch.
