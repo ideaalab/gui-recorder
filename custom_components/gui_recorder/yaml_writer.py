@@ -6,7 +6,7 @@ import yaml
 
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from .const import DOMAIN, MODE_INCLUDE
 
 _ALLOWED_EXCLUDE_KEYS = ("domains", "entity_globs", "event_types")
 _ALLOWED_INCLUDE_KEYS = ("domains", "entity_globs")
@@ -68,7 +68,10 @@ def parse_manual_exclusions(text: str) -> dict[str, dict[str, list[str]]]:
 async def async_write_yaml(hass: HomeAssistant) -> str:
     data = hass.data[DOMAIN]["data"]
     generated_path = data.get("generated_path", "gui_recorder.yaml")
-    excluded_entities = sorted(set(data.get("excluded_entities", [])))
+    include_mode = data.get("mode") == MODE_INCLUDE
+    # Only the active list is written. The other one stays in storage untouched,
+    # so switching modes back and forth never loses a selection.
+    managed_entities = sorted(set(data.get("included_entities" if include_mode else "excluded_entities", [])))
     purge_keep_days = int(data.get("purge_keep_days", 10))
     auto_purge = bool(data.get("auto_purge", True))
     auto_repack = bool(data.get("auto_repack", True))
@@ -91,14 +94,18 @@ async def async_write_yaml(hass: HomeAssistant) -> str:
     # references and reject — see https://github.com/ideaalab/gui-recorder).
     manual_exclude = manual.get("exclude", {})
     exclude_block: dict[str, list[str]] = {}
-    if excluded_entities:
-        exclude_block["entities"] = excluded_entities
+    if managed_entities and not include_mode:
+        exclude_block["entities"] = managed_entities
     for key in _ALLOWED_EXCLUDE_KEYS:
         if manual_exclude.get(key):
             exclude_block[key] = manual_exclude[key]
 
     manual_include = manual.get("include", {})
     include_block: dict[str, list[str]] = {}
+    if managed_entities and include_mode:
+        # include.entities has the highest precedence in the recorder filter, so an
+        # entity listed here is recorded even when a manual exclude glob matches it.
+        include_block["entities"] = managed_entities
     for key in _ALLOWED_INCLUDE_KEYS:
         if manual_include.get(key):
             include_block[key] = manual_include[key]
@@ -106,6 +113,8 @@ async def async_write_yaml(hass: HomeAssistant) -> str:
     parts: list[str] = []
     parts.append("# This file is managed by the GUI Recorder integration.")
     parts.append("# Manual edits will be overwritten.")
+    if include_mode:
+        parts.append("# Mode: include - only the entities listed under include.entities are recorded.")
     parts.append("")
     parts.append(f"auto_purge: {'true' if auto_purge else 'false'}")
     parts.append(f"auto_repack: {'true' if auto_repack else 'false'}")

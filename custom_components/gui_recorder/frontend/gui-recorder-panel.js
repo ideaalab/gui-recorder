@@ -8,6 +8,9 @@ class GuiRecorderPanel extends HTMLElement {
       obsolete: [],
       matched_exclusions: [],
       unmatched_exclusions: [],
+      mode: "exclude_entities",
+      excluded_count: 0,
+      included_count: 0,
       pending_restart: false,
       purge_keep_days: 10,
       auto_purge: true,
@@ -40,6 +43,16 @@ class GuiRecorderPanel extends HTMLElement {
     this._manualExclusionsValue = "";
     this._manualExclusionsError = "";
     this._savingManualExclusions = false;
+    this._switchingMode = false;
+    this._modeMessage = "";
+  }
+
+  _mode() {
+    return this._data.mode === "include_entities" ? "include_entities" : "exclude_entities";
+  }
+
+  _isIncludeMode() {
+    return this._mode() === "include_entities";
   }
 
   set hass(hass) {
@@ -352,6 +365,53 @@ class GuiRecorderPanel extends HTMLElement {
     }
   }
 
+  async _setMode(mode) {
+    if (!mode || mode === this._mode()) return;
+    const includeCount = Number(this._data.included_count || 0);
+    const excludeCount = Number(this._data.excluded_count || 0);
+    const question = mode === "include_entities"
+      ? (includeCount
+          ? `Switch to include mode?
+
+Only the ${includeCount} entities on your include list will be recorded; everything else stops being recorded, including entities added in the future.
+
+Your exclude list (${excludeCount} entries) is kept and comes back if you switch again. Home Assistant must be restarted to apply the change.`
+          : `Switch to include mode?
+
+Only entities on the include list will be recorded. Since that list is empty, everything you are recording right now will be copied into it first, so nothing changes until you start turning entities off.
+
+Entities that are unavailable at this moment cannot be copied and will need to be enabled by hand afterwards. Your exclude list (${excludeCount} entries) is kept. Home Assistant must be restarted to apply the change.`)
+      : `Switch back to exclude mode?
+
+Everything gets recorded again except the ${excludeCount} entries on your exclude list, and new entities are recorded by default.
+
+Your include list (${includeCount} entries) is kept and comes back if you switch again. Home Assistant must be restarted to apply the change.`;
+    if (!confirm(question)) {
+      this._render();
+      return;
+    }
+    this._modeMessage = "";
+    this._switchingMode = true;
+    this._render();
+    try {
+      const result = await this._hass.connection.sendMessagePromise({ type: "gui_recorder/set_mode", mode });
+      if (result?.ok) {
+        const seeded = Number(result.seeded || 0);
+        this._modeMessage = mode === "include_entities"
+          ? `Include mode active.${seeded ? ` ${seeded} currently recorded entities were copied into the include list.` : ""} Restart Home Assistant to apply it.`
+          : "Exclude mode active. Restart Home Assistant to apply it.";
+        await this._load();
+      } else {
+        this._modeMessage = result?.error || "Could not change the recording mode.";
+      }
+    } catch (err) {
+      this._modeMessage = err?.message || String(err);
+    } finally {
+      this._switchingMode = false;
+      this._render();
+    }
+  }
+
   async _saveManualExclusions() {
     this._manualExclusionsError = "";
     this._savingManualExclusions = true;
@@ -403,14 +463,14 @@ class GuiRecorderPanel extends HTMLElement {
     if (!excludedCount) return;
     if (!confirm(`This will permanently delete the full stored history for ${excludedCount} excluded entit${excludedCount === 1 ? "y" : "ies"}. This cannot be undone. Continue?`)) return;
     this._purgingExcluded = true;
-    this._message = "Purging the full history for excluded entities…";
+    this._message = "Purging the full history of the entities that are not being recorded…";
     this._render();
     try {
       await this._hass.connection.sendMessagePromise({ type: "gui_recorder/purge_excluded_entities" });
       this._refreshRecommended = true;
       this._message = "Excluded entities purged. Refreshing analysis…";
     } catch (err) {
-      this._message = `Error purging excluded entities: ${err?.message || err}`;
+      this._message = `Error purging non-recorded entities: ${err?.message || err}`;
       this._render();
     } finally {
       this._purgingExcluded = false;
@@ -526,7 +586,8 @@ class GuiRecorderPanel extends HTMLElement {
   }
 
   async _removeUnmatchedExclusions() {
-    if (!confirm("Remove all unmatched exclusions from the configuration?")) return;
+    const listLabel = this._isIncludeMode() ? "inclusions" : "exclusions";
+    if (!confirm(`Remove all unmatched ${listLabel} from the configuration?`)) return;
     this._pending.add("remove-unmatched");
     this._render();
     try {
@@ -534,11 +595,11 @@ class GuiRecorderPanel extends HTMLElement {
       const removed = result?.removed || [];
       await this._refreshTreeData();
       this._message = removed.length
-        ? `${removed.length} unmatched exclusions removed. Restart Home Assistant to apply the change.`
-        : "No unmatched exclusions were found.";
+        ? `${removed.length} unmatched ${listLabel} removed. Restart Home Assistant to apply the change.`
+        : `No unmatched ${listLabel} were found.`;
       this._render();
     } catch (err) {
-      this._message = `Could not remove unmatched exclusions: ${err?.message || err}`;
+      this._message = `Could not remove unmatched ${listLabel}: ${err?.message || err}`;
       this._render();
     } finally {
       this._pending.delete("remove-unmatched");
@@ -689,6 +750,7 @@ class GuiRecorderPanel extends HTMLElement {
     const totalRows = Number(stats.total_rows || 0);
     const purgeActionBusy = this._isPurgeBusy();
     const migrationPending = this._isMigrationPending();
+    const includeMode = this._isIncludeMode();
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -696,6 +758,11 @@ class GuiRecorderPanel extends HTMLElement {
         .wrap { max-width:1500px; margin:0 auto; }
         .toolbar, .card, .notice { background:var(--card-background-color); border-radius:12px; padding:16px; box-shadow:var(--ha-card-box-shadow, none); margin-bottom:16px; border:1px solid var(--divider-color); }
         .card.migration { border-color: var(--warning-color, #ff9800); }
+        .mode-options { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:12px; }
+        .mode-option { display:flex; gap:10px; align-items:flex-start; padding:12px; border:1px solid var(--divider-color); border-radius:10px; cursor:pointer; }
+        .mode-option.selected { border-color:var(--primary-color); background:color-mix(in srgb, var(--card-background-color) 88%, var(--primary-color)); }
+        .mode-option input { margin-top:3px; }
+        .mode-title { font-weight:600; margin-bottom:4px; }
         .notice.pending { border-color:var(--warning-color, #ff9800); background:color-mix(in srgb, var(--card-background-color) 82%, var(--warning-color, #ff9800)); }
         .notice.pending.sticky { position:sticky; top:0; z-index:20; box-shadow:0 4px 12px rgba(0,0,0,0.2); }
         .notice.stale { border-color:var(--warning-color, #ff9800); border-left:6px solid var(--warning-color, #ff9800); background:color-mix(in srgb, var(--card-background-color) 76%, var(--warning-color, #ff9800)); color:var(--primary-text-color); }
@@ -811,6 +878,37 @@ class GuiRecorderPanel extends HTMLElement {
         </div>
 
         <div class="card">
+          <h2>Recording mode</h2>
+          <div class="row-note" style="margin-bottom:12px;">
+            This decides what the entity toggles below write into <code>gui_recorder.yaml</code>. Both lists are stored separately, so switching between modes never deletes the other one.
+          </div>
+          <div class="mode-options">
+            <label class="mode-option ${includeMode ? "" : "selected"}">
+              <input type="radio" name="recording-mode" value="exclude_entities" ${includeMode ? "" : "checked"} ${this._switchingMode ? "disabled" : ""}>
+              <div>
+                <div class="mode-title">Exclude list <span class="subtle">(default)</span></div>
+                <div class="row-note">
+                  Everything is recorded except the entities you switch off. New entities that appear later <strong>are recorded</strong> until you exclude them.
+                  Currently ${this._formatNumber(Number(this._data.excluded_count || 0))} ${Number(this._data.excluded_count || 0) === 1 ? "entity" : "entities"} on the list.
+                </div>
+              </div>
+            </label>
+            <label class="mode-option ${includeMode ? "selected" : ""}">
+              <input type="radio" name="recording-mode" value="include_entities" ${includeMode ? "checked" : ""} ${this._switchingMode ? "disabled" : ""}>
+              <div>
+                <div class="mode-title">Include list <span class="subtle">(allowlist)</span></div>
+                <div class="row-note">
+                  Only the entities you switch on are recorded. New entities that appear later are <strong>not recorded</strong> until you enable them, and an entity on this list is recorded even if one of your manual <code>exclude.entity_globs</code> matches it.
+                  Currently ${this._formatNumber(Number(this._data.included_count || 0))} ${Number(this._data.included_count || 0) === 1 ? "entity" : "entities"} on the list.
+                </div>
+              </div>
+            </label>
+          </div>
+          ${includeMode && !Number(this._data.included_count || 0) ? `<div class="message warn">The include list is empty, so no entity matches it and Home Assistant falls back to recording everything. Switch entities on, or go back to exclude mode.</div>` : ""}
+          ${this._modeMessage ? `<div class="message">${this._escapeHtml(this._modeMessage)}</div>` : ""}
+        </div>
+
+        <div class="card">
           <h2>Manual exclusions (advanced)</h2>
           <div class="row-note" style="margin-bottom:10px;">
             Raw YAML merged into the generated <code>gui_recorder.yaml</code>. Only <code>exclude.domains</code>, <code>exclude.entity_globs</code>, <code>exclude.event_types</code>, <code>include.domains</code> and <code>include.entity_globs</code> are allowed here.
@@ -844,7 +942,7 @@ class GuiRecorderPanel extends HTMLElement {
             <div class="stat-box"><div class="stat-label">Entities with records</div><div class="stat-value">${this._formatNumber(Object.keys(stats.entity_counts || {}).length)}</div></div>
             <div class="stat-box"><div class="stat-label">Current records</div><div class="stat-value">${this._formatNumber(stats.current_rows || 0)}</div></div>
             <div class="stat-box"><div class="stat-label">Obsolete / unlinked records</div><div class="stat-value">${this._formatNumber(stats.obsolete_rows || 0)}</div></div>
-            <div class="stat-box"><div class="stat-label">Configured exclusions</div><div class="stat-value">${this._formatNumber(stats.configured_exclusions || 0)}</div><div class="stat-subtle">Matched ${this._formatNumber(stats.matched_exclusions || 0)} · Unmatched ${this._formatNumber(stats.unmatched_exclusions || 0)}</div></div>
+            <div class="stat-box"><div class="stat-label">Configured ${includeMode ? "inclusions" : "exclusions"}</div><div class="stat-value">${this._formatNumber(stats.configured_exclusions || 0)}</div><div class="stat-subtle">Matched ${this._formatNumber(stats.matched_exclusions || 0)} · Unmatched ${this._formatNumber(stats.unmatched_exclusions || 0)}</div></div>
             <div class="stat-box"><div class="stat-label">DB size</div><div class="stat-value">${this._escapeHtml(this._formatBytes(stats.db_size_bytes || 0))}</div></div>
             <div class="stat-box"><div class="stat-label">Database</div><div class="stat-value">${this._escapeHtml(stats.db_path || "home-assistant_v2.db")}</div></div>
           </div>
@@ -871,10 +969,12 @@ class GuiRecorderPanel extends HTMLElement {
               </div>
             </div>
             <div class="setting-box">
-              <div class="stat-label">Purge excluded entities</div>
-              <div class="row-note">Deletes the full stored history for all entities currently excluded by GUI Recorder. This ignores the global retention and removes all stored rows for those excluded entities.</div>
+              <div class="stat-label">Purge non-recorded entities</div>
+              <div class="row-note">${includeMode
+                ? "Deletes the full stored history of every entity that is <strong>not</strong> on the include list, i.e. everything GUI Recorder is no longer recording. This ignores the global retention."
+                : "Deletes the full stored history for all entities currently excluded by GUI Recorder. This ignores the global retention and removes all stored rows for those excluded entities."}</div>
               <div class="setting-actions" style="margin-top:12px;">
-                <button class="action-button danger" id="purge-excluded" ${(purgeActionBusy || !Number(this._data?.stats?.configured_exclusions || 0)) ? "disabled" : ""}>${this._purgingExcluded ? "Purging…" : "Purge excluded entities"}</button>
+                <button class="action-button danger" id="purge-excluded" ${(purgeActionBusy || (!includeMode && !Number(this._data?.stats?.configured_exclusions || 0))) ? "disabled" : ""}>${this._purgingExcluded ? "Purging…" : "Purge non-recorded entities"}</button>
               </div>
             </div>
             <div class="setting-box">
@@ -885,7 +985,7 @@ class GuiRecorderPanel extends HTMLElement {
             <div class="setting-box">
               <div class="stat-label">Repack after manual purge</div>
               <div>${this._switchMarkup({ checked: this._repackAfterManualPurgeValue, kind: "repack-toggle", entityId: "repack_after_manual_purge", disabled: this._togglingRepack })}${this._togglingRepack ? `<span class="pending-dot" title="Saving"></span>` : ""}</div>
-              <div class="row-note" style="margin-top:8px;">When enabled, the database file is compacted (VACUUM) after <em>Purge DB</em> and <em>Purge excluded entities</em>. This reclaims disk space but can take significantly longer, especially on large databases.</div>
+              <div class="row-note" style="margin-top:8px;">When enabled, the database file is compacted (VACUUM) after <em>Purge DB</em> and <em>Purge non-recorded entities</em>. This reclaims disk space but can take significantly longer, especially on large databases.</div>
             </div>
             <div class="setting-box">
               <div class="stat-label">Restart Home Assistant</div>
@@ -1014,14 +1114,14 @@ class GuiRecorderPanel extends HTMLElement {
 
         <div class="card">
           <div class="orphans-head">
-            <h2>Unmatched configured exclusions</h2>
+            <h2>Unmatched configured ${includeMode ? "inclusions" : "exclusions"}</h2>
             <div style="display:flex; align-items:center; gap:8px;">
               <div class="subtle">${filteredUnmatchedExclusions.length}</div>
               ${filteredUnmatchedExclusions.length ? `<button class="secondary" id="remove-unmatched-exclusions" ${this._pending.has("remove-unmatched") ? "disabled" : ""}>Remove all unmatched</button>` : ""}
             </div>
           </div>
-          <div class="message">Configured exclusions stored by GUI Recorder that do not match any current entity_id in Home Assistant.</div>
-          ${filteredUnmatchedExclusions.length === 0 ? `<div>No unmatched exclusions detected.</div>` : `
+          <div class="message">Entity ids stored by GUI Recorder in the active ${includeMode ? "include" : "exclude"} list that do not match any current entity in Home Assistant.</div>
+          ${filteredUnmatchedExclusions.length === 0 ? `<div>No unmatched ${includeMode ? "inclusions" : "exclusions"} detected.</div>` : `
             <table>
               <thead>
                 <tr>
@@ -1107,6 +1207,9 @@ class GuiRecorderPanel extends HTMLElement {
     this.shadowRoot.getElementById("purge-keep-days")?.addEventListener("input", (ev) => { this._keepDaysValue = ev.target.value; });
     this.shadowRoot.getElementById("commit-interval")?.addEventListener("input", (ev) => { this._commitIntervalValue = ev.target.value; });
     this.shadowRoot.getElementById("save-global-options")?.addEventListener("click", () => this._saveGlobalOptions());
+    this.shadowRoot.querySelectorAll('input[name="recording-mode"]').forEach((el) => {
+      el.addEventListener("change", (ev) => this._setMode(ev.target.value));
+    });
     this.shadowRoot.getElementById("manual-exclusions")?.addEventListener("input", (ev) => { this._manualExclusionsValue = ev.target.value; });
     this.shadowRoot.getElementById("save-manual-exclusions")?.addEventListener("click", () => this._saveManualExclusions());
 

@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN, INTEGRATION_VERSION
+from .const import DOMAIN, INTEGRATION_VERSION, MODE_EXCLUDE, MODE_INCLUDE
 from .db_stats import async_analyze_db
 from .migration import async_detect_sync_status, async_disable_legacy, async_ensure_gui_enabled, async_import_legacy
 from .storage import async_reload_data, async_save_data
@@ -65,6 +65,35 @@ def _normalize_excluded(values) -> list[str]:
     return sorted(normalized)
 
 
+def _get_mode(data: dict) -> str:
+    """Which list the entity toggles manage.
+
+    exclude_entities (default): the list holds what is NOT recorded.
+    include_entities:           the list holds what IS recorded (allowlist).
+    Both lists are kept in storage, so switching modes never destroys the other one.
+    """
+    return MODE_INCLUDE if data.get("mode") == MODE_INCLUDE else MODE_EXCLUDE
+
+
+def _managed_key(data: dict) -> str:
+    return "included_entities" if _get_mode(data) == MODE_INCLUDE else "excluded_entities"
+
+
+def _managed_set(data: dict) -> set[str]:
+    return set(_normalize_excluded(data.get(_managed_key(data), [])))
+
+
+def _is_recorded(entity_id: str, managed: set[str], mode: str) -> bool:
+    return entity_id in managed if mode == MODE_INCLUDE else entity_id not in managed
+
+
+def _apply_recorded(managed: set[str], entity_ids: set[str], recorded: bool, mode: str) -> None:
+    """Add/remove entity_ids from the managed list so they end up in the wanted state."""
+    if recorded == (mode == MODE_INCLUDE):
+        managed |= entity_ids
+    else:
+        managed -= entity_ids
+
 async def _save_and_reload(hass: HomeAssistant, data: dict) -> dict:
     await async_save_data(hass, data)
     await async_write_yaml(hass)
@@ -74,20 +103,18 @@ async def _save_and_reload(hass: HomeAssistant, data: dict) -> dict:
 
 async def _set_entity_recorded_state(hass: HomeAssistant, entity_id: str, recorded: bool) -> tuple[dict, bool]:
     data = await async_reload_data(hass)
-    excluded = set(_normalize_excluded(data.get("excluded_entities", [])))
+    mode = _get_mode(data)
+    managed = _managed_set(data)
     entity_id = _normalize_entity_id(entity_id)
-    before = set(excluded)
+    before = set(managed)
 
-    if recorded:
-        excluded.discard(entity_id)
-    else:
-        excluded.add(entity_id)
+    _apply_recorded(managed, {entity_id}, recorded, mode)
 
-    changed = excluded != before
+    changed = managed != before
     if not changed:
         return data, False
 
-    data["excluded_entities"] = _normalize_excluded(excluded)
+    data[_managed_key(data)] = _normalize_excluded(managed)
     data["pending_restart"] = True
     reloaded = await _save_and_reload(hass, data)
     return reloaded, True
@@ -115,7 +142,8 @@ def _build_rows(hass: HomeAssistant) -> dict:
     entity_registry = er.async_get(hass)
     device_registry = dr.async_get(hass)
     data = hass.data[DOMAIN]["data"]
-    excluded = set(data.get("excluded_entities", []))
+    mode = _get_mode(data)
+    managed = _managed_set(data)
     stats_payload = _build_stats_payload(hass)
     entity_counts = stats_payload.get("entity_counts", {})
 
@@ -137,7 +165,7 @@ def _build_rows(hass: HomeAssistant) -> dict:
             "platform": entity_entry.platform,
             "domain": entity_entry.domain,
             "device_id": entity_entry.device_id,
-            "recorded": entity_entry.entity_id not in excluded,
+            "recorded": _is_recorded(entity_entry.entity_id, managed, mode),
             "record_count": int(entity_counts.get(entity_entry.entity_id, 0)),
         }
 
@@ -183,7 +211,7 @@ def _build_rows(hass: HomeAssistant) -> dict:
                     "platform": domain,
                     "domain": domain,
                     "device_id": None,
-                    "recorded": entity_id not in excluded,
+                    "recorded": _is_recorded(entity_id, managed, mode),
                     "record_count": int(count),
                 }
             )
@@ -215,15 +243,15 @@ def _build_rows(hass: HomeAssistant) -> dict:
     # out of it as soon as their records are gone and be reported as unmatched.
     known_entity_ids = current_entity_ids | live_entity_ids
 
-    matched_exclusions = sorted(entity_id for entity_id in excluded if entity_id in known_entity_ids)
-    unmatched_exclusions = sorted(entity_id for entity_id in excluded if entity_id not in known_entity_ids)
+    matched_exclusions = sorted(entity_id for entity_id in managed if entity_id in known_entity_ids)
+    unmatched_exclusions = sorted(entity_id for entity_id in managed if entity_id not in known_entity_ids)
 
     current_rows = sum(int(entity_counts.get(entity_id, 0)) for entity_id in current_entity_ids)
     obsolete_rows = sum(int(item["record_count"]) for item in obsolete_entities)
     stats_payload["current_rows"] = current_rows
     stats_payload["obsolete_rows"] = obsolete_rows
     stats_payload["obsolete_entity_count"] = len(obsolete_entities)
-    stats_payload["configured_exclusions"] = len(excluded)
+    stats_payload["configured_exclusions"] = len(managed)
     stats_payload["matched_exclusions"] = len(matched_exclusions)
     stats_payload["unmatched_exclusions"] = len(unmatched_exclusions)
 
@@ -231,6 +259,9 @@ def _build_rows(hass: HomeAssistant) -> dict:
         "devices": device_rows,
         "orphans": orphan_entities,
         "obsolete": obsolete_entities,
+        "mode": mode,
+        "excluded_count": len(_normalize_excluded(data.get("excluded_entities", []))),
+        "included_count": len(_normalize_excluded(data.get("included_entities", []))),
         "pending_restart": bool(data.get("pending_restart", False)),
         "purge_keep_days": int(data.get("purge_keep_days", 10)),
         "auto_purge": bool(data.get("auto_purge", True)),
@@ -289,21 +320,21 @@ async def ws_set_entity(hass: HomeAssistant, connection: websocket_api.ActiveCon
 async def ws_set_device(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     entity_registry = er.async_get(hass)
     data = await async_reload_data(hass)
-    excluded = set(_normalize_excluded(data.get("excluded_entities", [])))
-    before = set(excluded)
+    mode = _get_mode(data)
+    managed = _managed_set(data)
+    before = set(managed)
 
-    for entry in entity_registry.entities.values():
-        if entry.device_id != msg["device_id"]:
-            continue
-        if msg["recorded"]:
-            excluded.discard(entry.entity_id)
-        else:
-            excluded.add(entry.entity_id)
+    device_entity_ids = {
+        entry.entity_id
+        for entry in entity_registry.entities.values()
+        if entry.device_id == msg["device_id"]
+    }
+    _apply_recorded(managed, device_entity_ids, msg["recorded"], mode)
 
-    changed = excluded != before
+    changed = managed != before
     generated_file = None
     if changed:
-        data["excluded_entities"] = _normalize_excluded(excluded)
+        data[_managed_key(data)] = _normalize_excluded(managed)
         data["pending_restart"] = True
         await async_save_data(hass, data)
         generated_file = await async_write_yaml(hass)
@@ -322,19 +353,17 @@ async def ws_set_device(hass: HomeAssistant, connection: websocket_api.ActiveCon
 )
 async def ws_set_entities_bulk(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     data = await async_reload_data(hass)
-    excluded = set(_normalize_excluded(data.get("excluded_entities", [])))
-    before = set(excluded)
+    mode = _get_mode(data)
+    managed = _managed_set(data)
+    before = set(managed)
     entity_ids = {_normalize_entity_id(entity_id) for entity_id in msg["entity_ids"]}
 
-    if msg["recorded"]:
-        excluded -= entity_ids
-    else:
-        excluded |= entity_ids
+    _apply_recorded(managed, entity_ids, msg["recorded"], mode)
 
-    changed = excluded != before
+    changed = managed != before
     generated_file = None
     if changed:
-        data["excluded_entities"] = _normalize_excluded(excluded)
+        data[_managed_key(data)] = _normalize_excluded(managed)
         data["pending_restart"] = True
         await async_save_data(hass, data)
         generated_file = await async_write_yaml(hass)
@@ -385,7 +414,18 @@ async def ws_set_manual_exclusions(hass: HomeAssistant, connection: websocket_ap
     }
 )
 async def ws_remove_exclusion(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    _, changed = await _set_entity_recorded_state(hass, msg["entity_id"], True)
+    # This removes the entry from whichever list the toggles manage. In include
+    # mode that is the opposite of "make it recorded", so it can't go through
+    # _set_entity_recorded_state.
+    data = await async_reload_data(hass)
+    managed = _managed_set(data)
+    entity_id = _normalize_entity_id(msg["entity_id"])
+    changed = entity_id in managed
+    if changed:
+        managed.discard(entity_id)
+        data[_managed_key(data)] = _normalize_excluded(managed)
+        data["pending_restart"] = True
+        await _save_and_reload(hass, data)
     connection.send_result(
         msg["id"],
         {
@@ -406,12 +446,12 @@ async def ws_remove_unmatched_exclusions(hass: HomeAssistant, connection: websoc
     known_entity_ids = {entry.entity_id for entry in entity_registry.entities.values()}
     known_entity_ids |= set(hass.states.async_entity_ids())
     data = await async_reload_data(hass)
-    excluded = _normalize_excluded(data.get("excluded_entities", []))
-    removed = sorted(entity_id for entity_id in excluded if entity_id not in known_entity_ids)
+    managed = _normalize_excluded(data.get(_managed_key(data), []))
+    removed = sorted(entity_id for entity_id in managed if entity_id not in known_entity_ids)
 
     if removed:
-        remaining = [eid for eid in excluded if eid not in set(removed)]
-        data["excluded_entities"] = _normalize_excluded(remaining)
+        remaining = [eid for eid in managed if eid not in set(removed)]
+        data[_managed_key(data)] = _normalize_excluded(remaining)
         data["pending_restart"] = True
         await _save_and_reload(hass, data)
 
@@ -533,7 +573,15 @@ async def ws_purge_all(hass: HomeAssistant, connection: websocket_api.ActiveConn
 @websocket_api.websocket_command({vol.Required("type"): "gui_recorder/purge_excluded_entities"})
 async def ws_purge_excluded_entities(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     data = hass.data[DOMAIN]["data"]
-    entity_ids = sorted(set(data.get("excluded_entities", [])))
+    if _get_mode(data) == MODE_INCLUDE:
+        # In allowlist mode the "not recorded" set is everything that isn't on the
+        # include list. Only entities that actually have rows are worth purging,
+        # so the target set comes from the analysed record counts.
+        included = _managed_set(data)
+        entity_counts = (data.get("stats", {}) or {}).get("entity_counts", {}) or {}
+        entity_ids = sorted(entity_id for entity_id in entity_counts if entity_id not in included)
+    else:
+        entity_ids = sorted(set(data.get("excluded_entities", [])))
     repack = bool(data.get("repack_after_manual_purge", False)) and bool(entity_ids)
     data["repack_in_progress"] = bool(repack)
     if repack:
@@ -674,11 +722,67 @@ async def ws_enable_gui(hass: HomeAssistant, connection: websocket_api.ActiveCon
     connection.send_result(msg["id"], result)
 
 
+@websocket_api.require_admin
+@websocket_api.async_response
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "gui_recorder/set_mode",
+        vol.Required("mode"): vol.In([MODE_EXCLUDE, MODE_INCLUDE]),
+        vol.Optional("seed"): bool,
+    }
+)
+async def ws_set_mode(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Switch which list the entity toggles manage.
+
+    Both lists live in storage side by side, so switching back and forth never
+    throws anything away: the other list is simply not written to the yaml while
+    it is inactive.
+    """
+    data = await async_reload_data(hass)
+    current = _get_mode(data)
+    target = msg["mode"]
+    seeded = 0
+
+    if current == target:
+        connection.send_result(msg["id"], {"ok": True, "changed": False, "mode": target, "seeded": 0})
+        return
+
+    if target == MODE_INCLUDE and not data.get("included_entities"):
+        # An empty allowlist means "record nothing", which is never what the user
+        # meant by switching. Seed it with what is being recorded right now, so
+        # the switch preserves current behaviour instead of silencing everything.
+        if msg.get("seed", True):
+            excluded = set(_normalize_excluded(data.get("excluded_entities", [])))
+            entity_registry = er.async_get(hass)
+            known = {entry.entity_id for entry in entity_registry.entities.values()}
+            known |= set(hass.states.async_entity_ids())
+            seed = sorted(entity_id for entity_id in known if entity_id not in excluded)
+            data["included_entities"] = _normalize_excluded(seed)
+            seeded = len(seed)
+
+    data["mode"] = target
+    data["pending_restart"] = True
+    await _save_and_reload(hass, data)
+
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "changed": True,
+            "mode": target,
+            "seeded": seeded,
+            "restart_required": True,
+            "excluded_count": len(data.get("excluded_entities", [])),
+            "included_count": len(data.get("included_entities", [])),
+        },
+    )
+
 async def async_setup_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_tree)
     websocket_api.async_register_command(hass, ws_set_entity)
     websocket_api.async_register_command(hass, ws_set_device)
     websocket_api.async_register_command(hass, ws_set_entities_bulk)
+    websocket_api.async_register_command(hass, ws_set_mode)
     websocket_api.async_register_command(hass, ws_set_manual_exclusions)
     websocket_api.async_register_command(hass, ws_remove_exclusion)
     websocket_api.async_register_command(hass, ws_remove_unmatched_exclusions)
