@@ -208,8 +208,15 @@ def _build_rows(hass: HomeAssistant) -> dict:
     orphan_entities = sorted(orphan_entities, key=row_sort_key)
     obsolete_entities = sorted(obsolete_entities, key=row_sort_key)
 
-    matched_exclusions = sorted(entity_id for entity_id in excluded if entity_id in current_entity_ids)
-    unmatched_exclusions = sorted(entity_id for entity_id in excluded if entity_id not in current_entity_ids)
+    # An entity that exists right now but has no rows in the database (because it
+    # is excluded and its history was already purged) is still a valid exclusion.
+    # Registry-less entities (sun.sun, YAML platforms without unique_id) only reach
+    # current_entity_ids through the entity_counts loop above, so they would drop
+    # out of it as soon as their records are gone and be reported as unmatched.
+    known_entity_ids = current_entity_ids | live_entity_ids
+
+    matched_exclusions = sorted(entity_id for entity_id in excluded if entity_id in known_entity_ids)
+    unmatched_exclusions = sorted(entity_id for entity_id in excluded if entity_id not in known_entity_ids)
 
     current_rows = sum(int(entity_counts.get(entity_id, 0)) for entity_id in current_entity_ids)
     obsolete_rows = sum(int(item["record_count"]) for item in obsolete_entities)
@@ -394,10 +401,13 @@ async def ws_remove_exclusion(hass: HomeAssistant, connection: websocket_api.Act
 @websocket_api.websocket_command({vol.Required("type"): "gui_recorder/remove_unmatched_exclusions"})
 async def ws_remove_unmatched_exclusions(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     entity_registry = er.async_get(hass)
-    current_entity_ids = {entry.entity_id for entry in entity_registry.entities.values()}
+    # Same rule as _build_rows: an entity with a live state but no registry entry
+    # still exists, so its exclusion is not unmatched and must not be removed here.
+    known_entity_ids = {entry.entity_id for entry in entity_registry.entities.values()}
+    known_entity_ids |= set(hass.states.async_entity_ids())
     data = await async_reload_data(hass)
     excluded = _normalize_excluded(data.get("excluded_entities", []))
-    removed = sorted(entity_id for entity_id in excluded if entity_id not in current_entity_ids)
+    removed = sorted(entity_id for entity_id in excluded if entity_id not in known_entity_ids)
 
     if removed:
         remaining = [eid for eid in excluded if eid not in set(removed)]
