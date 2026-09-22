@@ -740,6 +740,8 @@ class GuiRecorderPanel extends HTMLElement {
         table { width:100%; border-collapse:collapse; margin-top:2px; }
         th, td { text-align:left; padding:10px 8px; border-top:1px solid var(--divider-color); vertical-align:middle; font-size:0.95rem; }
         thead th { color:var(--secondary-text-color); font-weight:500; }
+        tbody tr:nth-child(even) { background:color-mix(in srgb, var(--primary-text-color) 4%, transparent); }
+        tbody tr:hover, .device-head:hover { background:color-mix(in srgb, var(--primary-color) 10%, transparent); }
         code { font-family:var(--code-font-family, monospace); font-size:0.9rem; }
         .switch { position:relative; display:inline-flex; width:38px; height:22px; vertical-align:middle; cursor:pointer; }
         .switch.disabled { cursor:default; opacity:0.6; }
