@@ -1,11 +1,30 @@
 # Include mode (beta) — testing notes
 
-Branch: `include-mode` · Version: `0.9.0-beta1`
+Branch: `include-mode` · Version: `0.9.0-beta2` (includes everything up to 0.8.39)
 
 This branch adds a **Recording mode** selector to the panel. It is not released; it is
 here so people can try it and report back before it goes into a normal version.
 
 **Take a backup of your Home Assistant configuration before testing.**
+
+## Installing it
+
+1. **Back up your Home Assistant configuration first.** This is a branch, not a release.
+2. Download https://github.com/ideaalab/gui-recorder/archive/refs/heads/include-mode.zip
+3. Unzip it somewhere outside your Home Assistant config. You get a folder called
+   `gui-recorder-include-mode`.
+4. Inside it, go to `custom_components/gui_recorder/`. **That folder, and only that one,**
+   replaces the existing `/config/custom_components/gui_recorder/`:
+
+   ```
+   gui-recorder-include-mode/custom_components/gui_recorder/   ->   /config/custom_components/gui_recorder/
+   ```
+
+   Do not copy the top-level `gui-recorder-include-mode` folder, and do not touch anything
+   else inside `/config/custom_components/` — your other integrations live there.
+5. Restart Home Assistant. The panel's version pill should read `0.9.0-beta2`.
+
+To go back, redownload GUI Recorder from HACS and restart.
 
 ## What it changes
 

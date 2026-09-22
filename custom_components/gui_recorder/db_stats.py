@@ -31,21 +31,22 @@ def is_sqlite_recorder(hass: HomeAssistant) -> bool | None:
 def _resolve_sqlite_db_path(hass: HomeAssistant) -> Path:
     """Return the real on-disk SQLite path from recorder.db_url, falling back to default."""
     db_url = _get_recorder_db_url(hass)
-    if db_url and db_url.lower().startswith("sqlite"):
+    if db_url and db_url.lower().startswith("sqlite://"):
         # SQLAlchemy URL formats supported:
         #   sqlite:///relative/path.db
         #   sqlite:////absolute/path.db   (the 4th slash is the root)
         #   sqlite://         -> in-memory (treat as default file)
-        try:
-            _, _, raw = db_url.partition("://")
-            raw = raw.lstrip("/")
-            if raw:
-                # If the original had 4 slashes ("sqlite:////"), it is absolute.
-                if db_url.startswith("sqlite:////"):
-                    return Path("/" + raw)
-                return Path(hass.config.path(raw))
-        except Exception:  # noqa: BLE001
-            pass
+        _, _, raw = db_url.partition("://")
+        # db_url might have url parameters. strip them out.
+        if "?" in raw:
+            raw, _, _ = raw.partition('?')
+        # remove all leading '/'
+        raw = raw.lstrip("/")
+        if raw:
+            # If the original had 4 slashes ("sqlite:////"), it is absolute.
+            if db_url.startswith("sqlite:////"):
+                return Path("/" + raw)
+            return Path(hass.config.path(raw))
     return Path(hass.config.path("home-assistant_v2.db"))
 
 
