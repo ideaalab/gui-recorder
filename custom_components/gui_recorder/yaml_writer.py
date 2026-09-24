@@ -69,6 +69,7 @@ async def async_write_yaml(hass: HomeAssistant) -> str:
     data = hass.data[DOMAIN]["data"]
     generated_path = data.get("generated_path", "gui_recorder.yaml")
     excluded_entities = sorted(set(data.get("excluded_entities", [])))
+    rescued_entities = sorted(set(data.get("rescued_entities", [])))
     purge_keep_days = int(data.get("purge_keep_days", 10))
     auto_purge = bool(data.get("auto_purge", True))
     auto_repack = bool(data.get("auto_repack", True))
@@ -99,6 +100,21 @@ async def async_write_yaml(hass: HomeAssistant) -> str:
 
     manual_include = manual.get("include", {})
     include_block: dict[str, list[str]] = {}
+
+    # Entities rescued from the user's own exclude domains/globs. include.entities is
+    # the only rule that outranks those, but it is only safe while such a filter is
+    # still configured: that keeps the recorder in entityfilter case 4a/4b, where
+    # everything unmatched keeps recording. With no domain or glob filter left, the
+    # same key would turn the whole config into an allowlist (case 6) - and nothing
+    # would be hidden in the first place, so there is nothing to rescue either.
+    has_domain_or_glob = any(
+        section.get(key)
+        for section, keys in ((manual_exclude, ("domains", "entity_globs")), (manual_include, ("domains", "entity_globs")))
+        for key in keys
+    )
+    if rescued_entities and has_domain_or_glob:
+        include_block["entities"] = rescued_entities
+
     for key in _ALLOWED_INCLUDE_KEYS:
         if manual_include.get(key):
             include_block[key] = manual_include[key]

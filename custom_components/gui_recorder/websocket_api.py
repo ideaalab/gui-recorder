@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import logging
+import re
 
 import voluptuous as vol
 
@@ -65,6 +67,70 @@ def _normalize_excluded(values) -> list[str]:
     return sorted(normalized)
 
 
+def _manual_exclude_filters(data: dict) -> tuple[set[str], re.Pattern[str] | None]:
+    """Domains and globs from the manual field that hide entities from the recorder.
+
+    The glob pattern is built exactly the way homeassistant.helpers.entityfilter
+    builds it (fnmatch.translate joined with "|", matched with .match), so what we
+    consider hidden is what the recorder actually skips.
+    """
+    try:
+        manual = parse_manual_exclusions(data.get("manual_exclusions_yaml", ""))
+    except ValueError:
+        return set(), None
+
+    exclude = manual.get("exclude", {})
+    domains = set(exclude.get("domains") or [])
+    globs = exclude.get("entity_globs") or []
+    pattern = re.compile("(?:" + "|".join(fnmatch.translate(glob) for glob in set(globs)) + ")") if globs else None
+    return domains, pattern
+
+
+def _is_glob_hidden(entity_id: str, domains: set[str], pattern: re.Pattern[str] | None) -> bool:
+    """True if one of the user's own manual exclude domains/globs matches this entity."""
+    if entity_id.split(".", 1)[0] in domains:
+        return True
+    return bool(pattern and pattern.match(entity_id))
+
+
+def _entity_recorded(entity_id: str, excluded: set[str], rescued: set[str], hidden: bool) -> bool:
+    """Whether the recorder will actually record this entity.
+
+    A hidden entity is only recorded when it is on the rescue list: with exclude
+    domains/globs present, include.entities is the only rule that outranks them
+    (entityfilter case 4b), and it also outranks exclude.entities.
+    """
+    if hidden:
+        return entity_id in rescued
+    return entity_id not in excluded
+
+
+def _apply_toggle(data: dict, entity_ids: set[str], recorded: bool) -> bool:
+    """Move entity_ids to the wanted state across both lists. True if anything changed."""
+    excluded = set(_normalize_excluded(data.get("excluded_entities", [])))
+    rescued = set(_normalize_excluded(data.get("rescued_entities", [])))
+    before = (set(excluded), set(rescued))
+    domains, pattern = _manual_exclude_filters(data)
+
+    for entity_id in entity_ids:
+        if recorded:
+            excluded.discard(entity_id)
+            # Removing it from exclude.entities is not enough when one of the user's
+            # own globs hides it - that needs include.entities, which is what the
+            # rescue list becomes.
+            if _is_glob_hidden(entity_id, domains, pattern):
+                rescued.add(entity_id)
+        else:
+            rescued.discard(entity_id)
+            excluded.add(entity_id)
+
+    if (excluded, rescued) == before:
+        return False
+
+    data["excluded_entities"] = _normalize_excluded(excluded)
+    data["rescued_entities"] = _normalize_excluded(rescued)
+    return True
+
 async def _save_and_reload(hass: HomeAssistant, data: dict) -> dict:
     await async_save_data(hass, data)
     await async_write_yaml(hass)
@@ -74,20 +140,12 @@ async def _save_and_reload(hass: HomeAssistant, data: dict) -> dict:
 
 async def _set_entity_recorded_state(hass: HomeAssistant, entity_id: str, recorded: bool) -> tuple[dict, bool]:
     data = await async_reload_data(hass)
-    excluded = set(_normalize_excluded(data.get("excluded_entities", [])))
     entity_id = _normalize_entity_id(entity_id)
-    before = set(excluded)
 
-    if recorded:
-        excluded.discard(entity_id)
-    else:
-        excluded.add(entity_id)
-
-    changed = excluded != before
+    changed = _apply_toggle(data, {entity_id}, recorded)
     if not changed:
         return data, False
 
-    data["excluded_entities"] = _normalize_excluded(excluded)
     data["pending_restart"] = True
     reloaded = await _save_and_reload(hass, data)
     return reloaded, True
@@ -116,6 +174,13 @@ def _build_rows(hass: HomeAssistant) -> dict:
     device_registry = dr.async_get(hass)
     data = hass.data[DOMAIN]["data"]
     excluded = set(data.get("excluded_entities", []))
+    rescued = set(data.get("rescued_entities", []))
+    manual_domains, manual_pattern = _manual_exclude_filters(data)
+
+    def _row_flags(entity_id: str) -> tuple[bool, bool]:
+        hidden = _is_glob_hidden(entity_id, manual_domains, manual_pattern)
+        return _entity_recorded(entity_id, excluded, rescued, hidden), hidden
+
     stats_payload = _build_stats_payload(hass)
     entity_counts = stats_payload.get("entity_counts", {})
 
@@ -129,6 +194,7 @@ def _build_rows(hass: HomeAssistant) -> dict:
 
     for entity_entry in entity_registry.entities.values():
         current_entity_ids.add(entity_entry.entity_id)
+        row_recorded, row_hidden = _row_flags(entity_entry.entity_id)
         row = {
             "entity_id": entity_entry.entity_id,
             "name": entity_entry.original_name or entity_entry.name or entity_entry.entity_id,
@@ -137,7 +203,8 @@ def _build_rows(hass: HomeAssistant) -> dict:
             "platform": entity_entry.platform,
             "domain": entity_entry.domain,
             "device_id": entity_entry.device_id,
-            "recorded": entity_entry.entity_id not in excluded,
+            "recorded": row_recorded,
+            "glob_hidden": row_hidden,
             "record_count": int(entity_counts.get(entity_entry.entity_id, 0)),
         }
 
@@ -183,7 +250,8 @@ def _build_rows(hass: HomeAssistant) -> dict:
                     "platform": domain,
                     "domain": domain,
                     "device_id": None,
-                    "recorded": entity_id not in excluded,
+                    "recorded": _row_flags(entity_id)[0],
+                    "glob_hidden": _row_flags(entity_id)[1],
                     "record_count": int(count),
                 }
             )
@@ -195,7 +263,8 @@ def _build_rows(hass: HomeAssistant) -> dict:
                 "platform": domain,
                 "domain": domain,
                 "device_id": None,
-                "recorded": entity_id not in excluded,
+                "recorded": _row_flags(entity_id)[0],
+                "glob_hidden": _row_flags(entity_id)[1],
                 "record_count": int(count),
                 "obsolete": True,
             }
@@ -231,6 +300,7 @@ def _build_rows(hass: HomeAssistant) -> dict:
         "devices": device_rows,
         "orphans": orphan_entities,
         "obsolete": obsolete_entities,
+        "rescued_entities": sorted(rescued),
         "pending_restart": bool(data.get("pending_restart", False)),
         "purge_keep_days": int(data.get("purge_keep_days", 10)),
         "auto_purge": bool(data.get("auto_purge", True)),
@@ -289,21 +359,15 @@ async def ws_set_entity(hass: HomeAssistant, connection: websocket_api.ActiveCon
 async def ws_set_device(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     entity_registry = er.async_get(hass)
     data = await async_reload_data(hass)
-    excluded = set(_normalize_excluded(data.get("excluded_entities", [])))
-    before = set(excluded)
+    device_entity_ids = {
+        entry.entity_id
+        for entry in entity_registry.entities.values()
+        if entry.device_id == msg["device_id"]
+    }
 
-    for entry in entity_registry.entities.values():
-        if entry.device_id != msg["device_id"]:
-            continue
-        if msg["recorded"]:
-            excluded.discard(entry.entity_id)
-        else:
-            excluded.add(entry.entity_id)
-
-    changed = excluded != before
+    changed = _apply_toggle(data, device_entity_ids, msg["recorded"])
     generated_file = None
     if changed:
-        data["excluded_entities"] = _normalize_excluded(excluded)
         data["pending_restart"] = True
         await async_save_data(hass, data)
         generated_file = await async_write_yaml(hass)
@@ -322,19 +386,11 @@ async def ws_set_device(hass: HomeAssistant, connection: websocket_api.ActiveCon
 )
 async def ws_set_entities_bulk(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     data = await async_reload_data(hass)
-    excluded = set(_normalize_excluded(data.get("excluded_entities", [])))
-    before = set(excluded)
     entity_ids = {_normalize_entity_id(entity_id) for entity_id in msg["entity_ids"]}
 
-    if msg["recorded"]:
-        excluded -= entity_ids
-    else:
-        excluded |= entity_ids
-
-    changed = excluded != before
+    changed = _apply_toggle(data, entity_ids, msg["recorded"])
     generated_file = None
     if changed:
-        data["excluded_entities"] = _normalize_excluded(excluded)
         data["pending_restart"] = True
         await async_save_data(hass, data)
         generated_file = await async_write_yaml(hass)

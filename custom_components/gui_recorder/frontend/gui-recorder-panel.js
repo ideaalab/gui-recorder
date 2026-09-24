@@ -652,6 +652,13 @@ class GuiRecorderPanel extends HTMLElement {
       .replace(/'/g, "&#039;");
   }
 
+  _globNote(entity) {
+    if (!entity.glob_hidden) return "";
+    return entity.recorded
+      ? `<div class="row-note">kept by include.entities, above your exclude glob</div>`
+      : `<div class="row-note">hidden by one of your manual exclude globs/domains</div>`;
+  }
+
   _switchMarkup({ checked, mixed = false, disabled = false, entityId = "", deviceId = "", kind = "entity" }) {
     return `
       <label class="switch ${mixed ? "mixed" : ""} ${disabled ? "disabled" : ""}">
@@ -957,7 +964,7 @@ class GuiRecorderPanel extends HTMLElement {
                               <td>${this._escapeHtml(entity.platform || "")}</td>
                               <td class="right">${this._formatNumber(entity.record_count || 0)}</td>
                               <td class="right">${this._escapeHtml(this._formatPercent(entity.record_count || 0, totalRows))}</td>
-                              <td>${this._switchMarkup({ checked: entity.recorded, disabled: entityBusy, entityId: entity.entity_id, deviceId: device.device_id, kind: "entity" })}${entityBusy ? `<span class="pending-dot" title="Saving"></span>` : ""}</td>
+                              <td>${this._switchMarkup({ checked: entity.recorded, disabled: entityBusy, entityId: entity.entity_id, deviceId: device.device_id, kind: "entity" })}${entityBusy ? `<span class="pending-dot" title="Saving"></span>` : ""}${this._globNote(entity)}</td>
                               <td><div class="actions-cell">${this._purgeButton(entity.entity_id, device.device_id, purgeActionBusy || purgeBusy || !entity.record_count)}${purgeBusy ? `<span class="pending-dot" title="Purging"></span>` : ""}</div></td>
                             </tr>
                           `;
@@ -1004,7 +1011,7 @@ class GuiRecorderPanel extends HTMLElement {
                       <td>${this._escapeHtml(entity.platform || "")}</td>
                       <td class="right">${this._formatNumber(entity.record_count || 0)}</td>
                       <td class="right">${this._escapeHtml(this._formatPercent(entity.record_count || 0, totalRows))}</td>
-                      <td>${this._switchMarkup({ checked: entity.recorded, disabled: entityBusy, entityId: entity.entity_id, kind: "entity" })}${entityBusy ? `<span class="pending-dot" title="Saving"></span>` : ""}</td>
+                      <td>${this._switchMarkup({ checked: entity.recorded, disabled: entityBusy, entityId: entity.entity_id, kind: "entity" })}${entityBusy ? `<span class="pending-dot" title="Saving"></span>` : ""}${this._globNote(entity)}</td>
                       <td><div class="actions-cell">${this._purgeButton(entity.entity_id, null, purgeActionBusy || purgeBusy || !entity.record_count)}${purgeBusy ? `<span class="pending-dot" title="Purging"></span>` : ""}</div></td>
                     </tr>
                   `;
@@ -1070,7 +1077,7 @@ class GuiRecorderPanel extends HTMLElement {
                       <td>${this._escapeHtml(entity.platform || "")}</td>
                       <td class="right">${this._formatNumber(entity.record_count || 0)}</td>
                       <td class="right">${this._escapeHtml(this._formatPercent(entity.record_count || 0, totalRows))}</td>
-                      <td>${this._switchMarkup({ checked: entity.recorded, disabled: entityBusy, entityId: entity.entity_id, kind: "entity" })}${entityBusy ? `<span class="pending-dot" title="Saving"></span>` : ""}</td>
+                      <td>${this._switchMarkup({ checked: entity.recorded, disabled: entityBusy, entityId: entity.entity_id, kind: "entity" })}${entityBusy ? `<span class="pending-dot" title="Saving"></span>` : ""}${this._globNote(entity)}</td>
                       <td><div class="actions-cell">${this._purgeButton(entity.entity_id, null, purgeActionBusy || purgeBusy || !entity.record_count)}${purgeBusy ? `<span class="pending-dot" title="Purging"></span>` : ""}</div></td>
                     </tr>
                   `;

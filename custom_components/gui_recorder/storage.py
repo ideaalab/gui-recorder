@@ -5,8 +5,10 @@ from homeassistant.helpers.storage import Store
 
 from .const import DEFAULT_STORAGE, DOMAIN, STORAGE_KEY, STORAGE_VERSION
 
+_ENTITY_LIST_KEYS = ("excluded_entities", "rescued_entities")
 
-def _normalize_excluded_entities(values) -> list[str]:
+
+def _normalize_entity_list(values) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
     for value in values or []:
@@ -16,6 +18,12 @@ def _normalize_excluded_entities(values) -> list[str]:
         seen.add(entity_id)
         normalized.append(entity_id)
     return sorted(normalized)
+
+
+def _normalize_entity_lists(data: dict) -> dict:
+    for key in _ENTITY_LIST_KEYS:
+        data[key] = _normalize_entity_list(data.get(key))
+    return data
 
 
 def get_store(hass: HomeAssistant) -> Store:
@@ -31,8 +39,7 @@ async def async_load_data(hass: HomeAssistant) -> dict:
     else:
         merged = DEFAULT_STORAGE.copy()
         merged.update(data)
-        merged["excluded_entities"] = _normalize_excluded_entities(merged.get("excluded_entities"))
-        data = merged
+        data = _normalize_entity_lists(merged)
     hass.data.setdefault(DOMAIN, {})["store"] = store
     hass.data[DOMAIN]["data"] = data
     return data
@@ -42,7 +49,7 @@ async def async_save_data(hass: HomeAssistant, data: dict) -> None:
     store: Store = hass.data[DOMAIN]["store"]
     normalized = DEFAULT_STORAGE.copy()
     normalized.update(data)
-    normalized["excluded_entities"] = _normalize_excluded_entities(normalized.get("excluded_entities"))
+    _normalize_entity_lists(normalized)
     await store.async_save(normalized)
     hass.data[DOMAIN]["data"] = normalized
 
@@ -56,8 +63,7 @@ async def async_reload_data(hass: HomeAssistant) -> dict:
     else:
         merged = DEFAULT_STORAGE.copy()
         merged.update(data)
-        merged["excluded_entities"] = _normalize_excluded_entities(merged.get("excluded_entities"))
-        data = merged
+        data = _normalize_entity_lists(merged)
     hass.data.setdefault(DOMAIN, {})["store"] = store
     hass.data[DOMAIN]["data"] = data
     return data
